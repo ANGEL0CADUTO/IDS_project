@@ -1,0 +1,32 @@
+syntax = "proto3";
+
+// Stesso package Go dei file proto esistenti
+option go_package = "github.com/ANGEL0CADUTO/IDS_project/proto";
+
+package proto;
+
+// Importiamo le definizioni delle metriche per poterle riutilizzare
+import "proto/metrics.proto";
+
+// Il servizio che lo Storage Service espone
+service Storage {
+  // RPC per salvare una singola metrica
+  rpc StoreMetric(Metric) returns (StorageResponse);
+  // RPC per salvare un record di allarme (lo useremo più avanti)
+  rpc StoreAlarm(Alarm) returns (StorageResponse);
+}
+
+// Messaggio che rappresenta un allarme generato dal servizio di analisi
+message Alarm {
+  string rule_id = 1;       // ID della regola o del modello che ha generato l'allarme
+  string client_id = 2;     // ID del client che ha originato i dati anomali
+  string description = 3;   // Descrizione dell'allarme
+  int64 timestamp = 4;      // Timestamp Unix dell'allarme
+  Metric trigger_metric = 5; // La metrica specifica che ha causato l'allarme
+}
+
+// Risposta generica dal servizio di storage
+message StorageResponse {
+  bool success = 1;
+  string message = 2;
+}

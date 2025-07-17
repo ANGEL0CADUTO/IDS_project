@@ -1,0 +1,27 @@
+// Specifica la sintassi del file. proto3 è la versione corrente.
+syntax = "proto3";
+
+// Definisce il package Go dove verrà generato il codice.
+option go_package = "github.com/ANGEL0CADUTO/IDS_project";
+
+package proto;
+
+// Il servizio che il Data Collector espone.
+service MetricsCollector {
+  // Un semplice RPC per inviare un singolo dato metrico.
+  rpc SendMetric(Metric) returns (CollectorResponse);
+}
+
+// Messaggio che rappresenta una singola metrica.
+message Metric {
+  string source_client_id = 1;  // ID del client che invia il dato
+  string type = 2;              // Tipo di metrica (es. "network_traffic", "cpu_usage")
+  double value = 3;             // Valore numerico della metrica
+  int64 timestamp = 4;          // Timestamp Unix dell'evento
+}
+
+// Risposta dal collector.
+message CollectorResponse {
+  bool accepted = 1;            // True se il dato è stato accettato
+  string message = 2;           // Messaggio di stato
+}
