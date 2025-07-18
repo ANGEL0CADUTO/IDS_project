@@ -39,9 +39,12 @@ services:
       - CONSUL_ADDR=consul:8500
       - ANALYSIS_SERVICE_NAME=analysis-service
       - GRPC_PORT=50051
+      - JAEGER_ADDR=jaeger:4317
     depends_on:
       analysis:
         condition: service_healthy
+      jaeger:
+        condition: service_started
 
     networks:
       - ids-net
@@ -132,6 +135,20 @@ services:
       - influxdb
     networks:
       - ids-net
+
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.53 # Usiamo una versione specifica
+    platform: linux/amd64
+    container_name: jaeger
+    ports:
+      - "16686:16686"  # Porta per l'interfaccia web di Jaeger
+      - "4317:4317"    # Porta per ricevere le tracce via gRPC (formato OTLP)
+      - "4318:4318"    # Porta per ricevere le tracce via HTTP (formato OTLP)
+    networks:
+      - ids-net
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true # Abilita il ricevitore OpenTelemetry
 
 volumes:
   influxdb-data:

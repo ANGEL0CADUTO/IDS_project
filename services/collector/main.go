@@ -10,8 +10,10 @@ import (
 	"time"
 
 	"github.com/ANGEL0CADUTO/IDS_project/pkg/consul"
+	"github.com/ANGEL0CADUTO/IDS_project/pkg/tracing"
 	pb "github.com/ANGEL0CADUTO/IDS_project/proto"
 	consulapi "github.com/hashicorp/consul/api"
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
@@ -77,26 +79,52 @@ func (s *server) SendMetric(ctx context.Context, in *pb.Metric) (*pb.CollectorRe
 }
 
 func main() {
+	// --- Configurazione degli indirizzi dei servizi ---
 	consulAddr := getEnv("CONSUL_ADDR", "localhost:8500")
+	// Indirizzo di Jaeger, ricevuto tramite variabile d'ambiente
+	jaegerAddr := getEnv("JAEGER_ADDR", "localhost:4317")
+	// Nome del servizio che apparirà in Jaeger
+	serviceName := "collector-service"
 
+	// --- Inizializzazione del Tracer Provider di OpenTelemetry ---
+	// Questa funzione, dal nostro package pkg/tracing, configura tutto il necessario
+	// per inviare le tracce a Jaeger.
+	tp, err := tracing.InitTracerProvider(context.Background(), serviceName, jaegerAddr)
+	if err != nil {
+		log.Fatalf("Failed to initialize tracer provider: %v", err)
+	}
+	// Defer a Shutdown per assicurare che tutte le tracce in buffer vengano inviate
+	// prima che l'applicazione termini.
+	defer func() {
+		if err := tp.Shutdown(context.Background()); err != nil {
+			log.Printf("Error shutting down tracer provider: %v", err)
+		}
+	}()
+
+	// --- Configurazione del client Consul (invariata) ---
 	config := consulapi.DefaultConfig()
 	config.Address = consulAddr
 	consulClient, err := consulapi.NewClient(config)
 	if err != nil {
 		log.Fatalf("Failed to create consul client: %v", err)
 	}
-
 	analysisServiceName := getEnv("ANALYSIS_SERVICE_NAME", "analysis-service")
 
+	// --- Configurazione del listener di rete (invariata) ---
 	portStr := getEnv("GRPC_PORT", "50051")
 	lis, err := net.Listen("tcp", ":"+portStr)
 	if err != nil {
 		log.Fatalf("failed to listen: %v", err)
 	}
 
-	s := grpc.NewServer()
+	// --- Creazione del server gRPC con l'interceptor per il Tracing ---
+	// Questa è la modifica cruciale: aggiungiamo l'interceptor di OpenTelemetry
+	// che cattura ogni richiesta in entrata e crea uno span di traccia.
+	s := grpc.NewServer(
+		grpc.UnaryInterceptor(otelgrpc.UnaryServerInterceptor()),
+	)
 
-	// Inizializziamo il server con le informazioni necessarie
+	// Registriamo il nostro servizio (invariato, ma ora girerà sul server "strumentato")
 	pb.RegisterMetricsCollectorServer(s, &server{
 		consulClient:        consulClient,
 		analysisServiceName: analysisServiceName,
