@@ -6,19 +6,20 @@ import (
 	"log"
 	"net"
 	"os"
+	"strconv"
 	"time"
 
-	// Import del client ufficiale di InfluxDB
+	"google.golang.org/grpc/health"
+	"google.golang.org/grpc/health/grpc_health_v1"
+
+	"github.com/ANGEL0CADUTO/IDS_project/pkg/consul"
+	pb "github.com/ANGEL0CADUTO/IDS_project/proto"
 	influxdb2 "github.com/influxdata/influxdb-client-go/v2"
 	"github.com/influxdata/influxdb-client-go/v2/api"
-
-	pb "github.com/ANGEL0CADUTO/IDS_project/proto"
 	"google.golang.org/grpc"
 )
 
-// Le porte e gli indirizzi non sono più hard-coded
 var (
-	grpcPort           = getEnv("GRPC_PORT", "50052")
 	influxURL          = getEnv("INFLUXDB_URL", "http://influxdb:8086")
 	influxToken        = getEnv("INFLUXDB_TOKEN", "password123")
 	influxOrg          = getEnv("INFLUXDB_ORG", "ids-project")
@@ -32,75 +33,117 @@ type server struct {
 	influxWriteAPIAlarms api.WriteAPI
 }
 
-// Implementazione di StoreMetric
 func (s *server) StoreMetric(ctx context.Context, in *pb.Metric) (*pb.StorageResponse, error) {
-	// Creiamo un "punto" dati nel formato richiesto da InfluxDB
-	p := influxdb2.NewPointWithMeasurement(in.GetType()).
-		AddTag("client_id", in.GetSourceClientId()).
-		AddField("value", in.GetValue()).
-		SetTime(time.Unix(in.GetTimestamp(), 0))
+	// Creiamo un punto per la metrica
+	p := influxdb2.NewPointWithMeasurement(in.Type).
+		AddTag("client_id", in.SourceClientId).
+		SetTime(time.Unix(in.Timestamp, 0))
 
-	// Scriviamo il punto. La scrittura è asincrona.
+	// --- NUOVA LOGICA ---
+	// Aggiungiamo ogni feature come un campo separato.
+	// Diamo loro nomi significativi.
+	if len(in.Features) == 41 {
+		p.AddField("duration", in.Features[0])
+		p.AddField("protocol_type", in.Features[1]) // Sarà un float, ma va bene
+		p.AddField("service", in.Features[2])
+		p.AddField("flag", in.Features[3])
+		p.AddField("src_bytes", in.Features[4])
+		p.AddField("dst_bytes", in.Features[5])
+		// ... potremmo aggiungerli tutti, ma per ora bastano i più importanti
+		p.AddField("count", in.Features[22])
+		p.AddField("srv_count", in.Features[23])
+		p.AddField("serror_rate", in.Features[24])
+		p.AddField("srv_serror_rate", in.Features[25])
+	} else {
+		// Fallback per le metriche semplici senza features
+		p.AddField("value", in.Value)
+	}
+
 	s.influxWriteAPI.WritePoint(p)
-
-	log.Printf("Stored metric from %s", in.GetSourceClientId())
-
+	log.Printf("Stored metric from %s", in.SourceClientId)
 	return &pb.StorageResponse{Success: true, Message: "Metric stored"}, nil
 }
 
-// Implementazione (vuota per ora) di StoreAlarm
 func (s *server) StoreAlarm(ctx context.Context, in *pb.Alarm) (*pb.StorageResponse, error) {
+	// Creiamo un punto per l'allarme
 	p := influxdb2.NewPointWithMeasurement("alarm").
-		AddTag("rule_id", in.GetRuleId()).
-		AddTag("client_id", in.GetClientId()).
-		AddField("description", in.GetDescription()).
-		SetTime(time.Unix(in.GetTimestamp(), 0))
+		AddTag("rule_id", in.RuleId).
+		AddTag("client_id", in.ClientId).
+		SetTime(time.Unix(in.Timestamp, 0))
+
+	// --- LOGICA AGGIORNATA ---
+	// Aggiungiamo la descrizione e le feature della metrica che ha causato l'allarme
+
+	p.AddField("description", in.Description)
+
+	// Controlliamo che la metrica trigger sia presente e abbia le feature
+	if in.TriggerMetric != nil && len(in.TriggerMetric.Features) == 41 {
+		features := in.TriggerMetric.Features
+		p.AddField("trigger_duration", features[0])
+		p.AddField("trigger_protocol_type", features[1])
+		p.AddField("trigger_service", features[2])
+		p.AddField("trigger_flag", features[3])
+		p.AddField("trigger_src_bytes", features[4]) // Questo sarà il nostro 'Valore Anomalo'
+		p.AddField("trigger_dst_bytes", features[5])
+		p.AddField("trigger_count", features[22])
+		p.AddField("trigger_serror_rate", features[24])
+	} else if in.TriggerMetric != nil {
+		// Fallback per allarmi generati da metriche semplici
+		p.AddField("trigger_value", in.TriggerMetric.Value)
+	}
 
 	s.influxWriteAPIAlarms.WritePoint(p)
 
-	log.Printf("Stored ALARM for client %s", in.GetClientId())
+	log.Printf("Stored ALARM for client %s, rule %s", in.ClientId, in.RuleId)
 	return &pb.StorageResponse{Success: true, Message: "Alarm stored"}, nil
 }
 
 func main() {
-	// Creazione del client InfluxDB
+	consulAddr := getEnv("CONSUL_ADDR", "localhost:8500")
+	portStr := getEnv("GRPC_PORT", "50052")
+	port, _ := strconv.Atoi(portStr)
+
+	serviceName := "storage-service"
+	serviceID := fmt.Sprintf("%s-%s", serviceName, os.Getenv("HOSTNAME"))
+	consulClient := consul.RegisterService(consulAddr, serviceName, serviceID, port)
+	defer consul.DeregisterService(consulClient, serviceID)
+
 	client := influxdb2.NewClient(influxURL, influxToken)
-	// Otteniamo un'API per la scrittura non bloccante (asincrona)
 	writeAPI := client.WriteAPI(influxOrg, influxBucket)
 	writeAPIAlarms := client.WriteAPI(influxOrg, influxAlarmsBucket)
+	defer client.Close()
+	defer writeAPI.Flush()
+	defer writeAPIAlarms.Flush()
 
-	// Gestione degli errori di scrittura in background
 	go func() {
 		for err := range writeAPI.Errors() {
 			log.Printf("InfluxDB write error: %s\n", err.Error())
 		}
+		for err := range writeAPIAlarms.Errors() {
+			log.Printf("InfluxDB (alarms) write error: %s\n", err.Error())
+		}
 	}()
 
-	lis, err := net.Listen("tcp", fmt.Sprintf(":%s", grpcPort))
+	lis, err := net.Listen("tcp", fmt.Sprintf(":%s", portStr))
 	if err != nil {
 		log.Fatalf("failed to listen: %v", err)
 	}
 
 	s := grpc.NewServer()
-	// Registriamo la nostra implementazione, passandogli le API di scrittura
 	pb.RegisterStorageServer(s, &server{
 		influxWriteAPI:       writeAPI,
 		influxWriteAPIAlarms: writeAPIAlarms,
 	})
 
+	//Per risolvere race condition
+	grpc_health_v1.RegisterHealthServer(s, health.NewServer())
+
 	log.Printf("Storage service listening at %v", lis.Addr())
-
-	// Pulizia finale: fluttua tutti i dati bufferizzati prima di chiudere.
-	defer client.Close()
-	defer writeAPI.Flush()
-
 	if err := s.Serve(lis); err != nil {
 		log.Fatalf("failed to serve: %v", err)
 	}
 }
 
-// Funzione helper per leggere le variabili d'ambiente con un valore di default.
-// Questo è un primo passo verso la configurazione esterna.
 func getEnv(key, fallback string) string {
 	if value, ok := os.LookupEnv(key); ok {
 		return value

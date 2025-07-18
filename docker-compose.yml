@@ -1,0 +1,142 @@
+
+services:
+ # NUOVO SERVIZIO: Consul Service Registry
+  consul:
+    image: consul:1.15 # Usiamo una versione specifica e stabile
+    platform: linux/amd64
+    container_name: consul
+    ports:
+      - "8500:8500" # Porta per l'interfaccia web e l'API HTTP di Consul
+      - "8600:8600/udp" # Porta per il DNS di Consul
+    command: "agent -server -ui -node=server-1 -bootstrap-expect=1 -client=0.0.0.0"
+
+    #Ho un problema di race condition, questo lo dovrebbe risolvere
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:8500/v1/status/leader" ]
+      interval: 5s
+      timeout: 2s
+      retries: 5
+
+    networks:
+      - ids-net
+
+  inference:
+    build:
+      context: ./services/inference
+    # Non esponiamo la porta all'host, serve solo internamente
+    networks:
+      - ids-net
+
+
+  collector:
+    build:
+      context: .
+      dockerfile: services/collector/Dockerfile
+    # Rimuoviamo 'replicas' dal collector, ne basta uno come entrypoint.
+    ports:
+      - "50051:50051"
+    environment:
+      - CONSUL_ADDR=consul:8500
+      - ANALYSIS_SERVICE_NAME=analysis-service
+      - GRPC_PORT=50051
+    depends_on:
+      analysis:
+        condition: service_healthy
+
+    networks:
+      - ids-net
+
+  analysis:
+    build:
+      context: .
+      dockerfile: services/analysis/Dockerfile
+    # --- MODIFICA CHIAVE QUI ---
+    deploy:
+      replicas: 2 # Avviamo due istanze del servizio di analisi
+    # Rimuoviamo 'ports' dall'analysis-service. Non deve essere esposto
+    # all'host, la comunicazione avviene internamente tramite la rete Docker.
+    environment:
+      - CONSUL_ADDR=consul:8500
+      - STORAGE_SERVICE_NAME=storage-service
+      - GRPC_PORT=50053
+      - INFERENCE_SERVICE_ADDR=http://inference:5000/predict
+    depends_on:
+      storage:
+        condition: service_healthy
+      consul:
+        condition: service_healthy
+      inference:
+        condition: service_started
+    healthcheck:
+      test: [ "CMD", "/grpc_health_probe", "-addr=:50053" ]
+      interval: 10s
+      timeout: 1s
+      retries: 5
+      start_period: 15s
+    networks:
+      - ids-net
+  
+  storage:
+    build:
+      context: .
+      dockerfile: services/storage/Dockerfile
+    environment:
+      # AGGIUNTO: Anche lo storage ha bisogno di sapere dove si trova Consul per registrarsi.
+      - CONSUL_ADDR=consul:8500
+      - GRPC_PORT=50052
+      - INFLUXDB_URL=http://influxdb:8086
+      - INFLUXDB_TOKEN=password123
+      - INFLUXDB_ORG=ids-project
+      - INFLUXDB_BUCKET=metrics
+      - INFLUXDB_ALARMS_BUCKET=alarms
+    depends_on:
+      influxdb:
+        condition: service_started # InfluxDB non ha un healthcheck semplice, quindi aspettiamo solo l'avvio
+      consul:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/grpc_health_probe", "-addr=:50052"]
+      interval: 10s
+      timeout: 1s
+      retries: 5
+      start_period: 15s
+    networks:
+      - ids-net
+
+  influxdb:
+    image: influxdb:2.7
+    container_name: influxdb
+    ports:
+      - "8086:8086"
+    volumes:
+      - influxdb-data:/var/lib/influxdb2
+    environment:
+      - DOCKER_INFLUXDB_INIT_MODE=setup
+      - DOCKER_INFLUXDB_INIT_USERNAME=admin
+      - DOCKER_INFLUXDB_INIT_PASSWORD=password1234
+      - DOCKER_INFLUXDB_INIT_ORG=ids-project
+      - DOCKER_INFLUXDB_INIT_BUCKET=metrics
+      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=password123
+    networks:
+      - ids-net
+
+  grafana:
+    image: grafana/grafana:9.5.1
+    platform: linux/amd64
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - influxdb
+    networks:
+      - ids-net
+
+volumes:
+  influxdb-data:
+  grafana-data:
+
+networks:
+  ids-net:
+    driver: bridge

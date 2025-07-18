@@ -2,7 +2,7 @@
 syntax = "proto3";
 
 // Definisce il package Go dove verrà generato il codice.
-option go_package = "github.com/ANGEL0CADUTO/IDS_project";
+option go_package = "github.com/ANGEL0CADUTO/IDS_project/proto";
 
 package proto;
 
@@ -14,10 +14,11 @@ service MetricsCollector {
 
 // Messaggio che rappresenta una singola metrica.
 message Metric {
-  string source_client_id = 1;  // ID del client che invia il dato
-  string type = 2;              // Tipo di metrica (es. "network_traffic", "cpu_usage")
-  double value = 3;             // Valore numerico della metrica
-  int64 timestamp = 4;          // Timestamp Unix dell'evento
+  string source_client_id = 1;
+  string type = 2;
+  double value = 3; // Possiamo tenerlo per metriche semplici
+  int64 timestamp = 4;
+  repeated float features = 5; // <-- NUOVO CAMPO: un array di float
 }
 
 // Risposta dal collector.

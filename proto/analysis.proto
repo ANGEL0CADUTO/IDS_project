@@ -1,0 +1,22 @@
+syntax = "proto3";
+
+package proto;
+
+// Importiamo le definizioni dei messaggi che già esistono.
+import "metrics.proto";
+
+
+
+option go_package = "github.com/ANGEL0CADUTO/IDS_project/proto";
+
+// La risposta dal servizio di analisi.
+message AnalysisResponse {
+  bool processed = 1;
+  string message = 2;
+}
+
+// La definizione del servizio di Analisi.
+service AnalysisService {
+  // Riceve una metrica, la analizza e decide cosa fare.
+  rpc AnalyzeMetric(Metric) returns (AnalysisResponse);
+}

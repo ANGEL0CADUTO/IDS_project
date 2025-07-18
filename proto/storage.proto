@@ -6,7 +6,7 @@ option go_package = "github.com/ANGEL0CADUTO/IDS_project/proto";
 package proto;
 
 // Importiamo le definizioni delle metriche per poterle riutilizzare
-import "proto/metrics.proto";
+import "metrics.proto";
 
 // Il servizio che lo Storage Service espone
 service Storage {
