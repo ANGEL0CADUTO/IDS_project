@@ -63,12 +63,15 @@ services:
       - STORAGE_SERVICE_NAME=storage-service
       - GRPC_PORT=50053
       - INFERENCE_SERVICE_ADDR=http://inference:5000/predict
+      - JAEGER_ADDR=jaeger:4317
     depends_on:
       storage:
         condition: service_healthy
       consul:
         condition: service_healthy
       inference:
+        condition: service_started
+      jaeger:
         condition: service_started
     healthcheck:
       test: [ "CMD", "/grpc_health_probe", "-addr=:50053" ]
@@ -92,11 +95,14 @@ services:
       - INFLUXDB_ORG=ids-project
       - INFLUXDB_BUCKET=metrics
       - INFLUXDB_ALARMS_BUCKET=alarms
+      - JAEGER_ADDR=jaeger:4317
     depends_on:
       influxdb:
         condition: service_started # InfluxDB non ha un healthcheck semplice, quindi aspettiamo solo l'avvio
       consul:
         condition: service_healthy
+      jaeger:
+        condition: service_started
     healthcheck:
       test: ["CMD", "/grpc_health_probe", "-addr=:50052"]
       interval: 10s
@@ -149,7 +155,8 @@ services:
       - ids-net
     environment:
       - COLLECTOR_OTLP_ENABLED=true # Abilita il ricevitore OpenTelemetry
-
+      - SPAN_STORAGE_TYPE=memory
+      - MEMORY_DEPENDENCY_LOOKBACK=2m
 volumes:
   influxdb-data:
   grafana-data:

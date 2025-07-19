@@ -9,14 +9,15 @@ import (
 	"strconv"
 	"time"
 
-	"google.golang.org/grpc/health"
-	"google.golang.org/grpc/health/grpc_health_v1"
-
 	"github.com/ANGEL0CADUTO/IDS_project/pkg/consul"
+	"github.com/ANGEL0CADUTO/IDS_project/pkg/tracing"
 	pb "github.com/ANGEL0CADUTO/IDS_project/proto"
 	influxdb2 "github.com/influxdata/influxdb-client-go/v2"
 	"github.com/influxdata/influxdb-client-go/v2/api"
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/health"
+	"google.golang.org/grpc/health/grpc_health_v1"
 )
 
 var (
@@ -99,15 +100,32 @@ func (s *server) StoreAlarm(ctx context.Context, in *pb.Alarm) (*pb.StorageRespo
 }
 
 func main() {
+	// --- Configurazione degli indirizzi dei servizi ---
 	consulAddr := getEnv("CONSUL_ADDR", "localhost:8500")
 	portStr := getEnv("GRPC_PORT", "50052")
 	port, _ := strconv.Atoi(portStr)
-
+	jaegerAddr := getEnv("JAEGER_ADDR", "localhost:4317")
 	serviceName := "storage-service"
+
+	// --- Inizializzazione del Tracer Provider di OpenTelemetry ---
+	// Lo aggiungiamo anche qui per coerenza e per preparare il terreno
+	// per la strumentazione completa di questo servizio.
+	tp, err := tracing.InitTracerProvider(context.Background(), serviceName, jaegerAddr)
+	if err != nil {
+		log.Fatalf("Failed to initialize tracer provider: %v", err)
+	}
+	defer func() {
+		if err := tp.Shutdown(context.Background()); err != nil {
+			log.Printf("Error shutting down tracer provider: %v", err)
+		}
+	}()
+
+	// --- Registrazione a Consul (invariata) ---
 	serviceID := fmt.Sprintf("%s-%s", serviceName, os.Getenv("HOSTNAME"))
 	consulClient := consul.RegisterService(consulAddr, serviceName, serviceID, port)
 	defer consul.DeregisterService(consulClient, serviceID)
 
+	// --- Configurazione del client InfluxDB (invariata) ---
 	client := influxdb2.NewClient(influxURL, influxToken)
 	writeAPI := client.WriteAPI(influxOrg, influxBucket)
 	writeAPIAlarms := client.WriteAPI(influxOrg, influxAlarmsBucket)
@@ -124,20 +142,32 @@ func main() {
 		}
 	}()
 
+	// --- Creazione del Listener di rete (invariata) ---
 	lis, err := net.Listen("tcp", fmt.Sprintf(":%s", portStr))
 	if err != nil {
 		log.Fatalf("failed to listen: %v", err)
 	}
 
-	s := grpc.NewServer()
+	// --- Creazione del server gRPC con l'Interceptor Condizionale ---
+	// Questa è la modifica chiave: l'interceptor di tracing viene applicato
+	// a tutte le chiamate, TRANNE a quella di health check di Consul.
+	s := grpc.NewServer(
+		grpc.UnaryInterceptor(
+			tracing.NewConditionalUnaryInterceptor(
+				otelgrpc.UnaryServerInterceptor(),
+				"/grpc.health.v1.Health/Check", // Nome del metodo da saltare
+			),
+		),
+	)
+
+	// Registrazione dei servizi sul server gRPC (invariata)
 	pb.RegisterStorageServer(s, &server{
 		influxWriteAPI:       writeAPI,
 		influxWriteAPIAlarms: writeAPIAlarms,
 	})
-
-	//Per risolvere race condition
 	grpc_health_v1.RegisterHealthServer(s, health.NewServer())
 
+	// Avvio del server
 	log.Printf("Storage service listening at %v", lis.Addr())
 	if err := s.Serve(lis); err != nil {
 		log.Fatalf("failed to serve: %v", err)
