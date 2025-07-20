@@ -1,4 +1,20 @@
-flask
+# requirements.txt per il servizio di inferenza
+
+# Librerie per il Machine Learning
 joblib
-scikit-learn
 numpy
+scikit-learn
+
+# Librerie per gRPC e Service Discovery
+grpcio
+grpcio-health-checking
+python-consul # Standardizzato alla libreria più comune
+
+# --- NUOVE DIPENDENZE: OpenTelemetry per il Tracing Distribuito ---
+opentelemetry-api
+opentelemetry-sdk
+opentelemetry-instrumentation-grpc
+opentelemetry-exporter-otlp-proto-grpc
+
+# Strumenti di sviluppo (opzionali in produzione ma sicuri da tenere)
+grpcio-tools

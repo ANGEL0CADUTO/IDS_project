@@ -1,38 +1,52 @@
-
 services:
- # NUOVO SERVIZIO: Consul Service Registry
   consul:
-    image: consul:1.15 # Usiamo una versione specifica e stabile
+    image: consul:1.15
     platform: linux/amd64
     container_name: consul
     ports:
-      - "8500:8500" # Porta per l'interfaccia web e l'API HTTP di Consul
-      - "8600:8600/udp" # Porta per il DNS di Consul
+      - "8500:8500"
+      - "8600:8600/udp"
     command: "agent -server -ui -node=server-1 -bootstrap-expect=1 -client=0.0.0.0"
-
-    #Ho un problema di race condition, questo lo dovrebbe risolvere
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:8500/v1/status/leader" ]
       interval: 5s
       timeout: 2s
       retries: 5
-
     networks:
       - ids-net
 
   inference:
     build:
       context: ./services/inference
-    # Non esponiamo la porta all'host, serve solo internamente
     networks:
       - ids-net
-
+    deploy:
+      restart_policy:
+        condition: on-failure
+    environment:
+      - CONSUL_HOST=consul
+      - CONSUL_PORT=8500
+      - GRPC_PORT=5000
+      # --- CORREZIONE 1: Aggiunta variabile per Jaeger ---
+      - JAEGER_ADDR=jaeger:4317
+    depends_on:
+      consul:
+        condition: service_healthy
+      # Aggiungiamo dipendenza da Jaeger per un avvio più ordinato
+      jaeger:
+        condition: service_started
+    healthcheck:
+      test: [ "CMD", "/grpc_health_probe", "-addr=:5000" ]
+      # --- CORREZIONE 2: Healthcheck più reattivo ---
+      interval: 5s
+      timeout: 1s
+      retries: 3
+      start_period: 10s
 
   collector:
     build:
       context: .
       dockerfile: services/collector/Dockerfile
-    # Rimuoviamo 'replicas' dal collector, ne basta uno come entrypoint.
     ports:
       - "50051:50051"
     environment:
@@ -45,7 +59,6 @@ services:
         condition: service_healthy
       jaeger:
         condition: service_started
-
     networks:
       - ids-net
 
@@ -53,41 +66,39 @@ services:
     build:
       context: .
       dockerfile: services/analysis/Dockerfile
-    # --- MODIFICA CHIAVE QUI ---
     deploy:
-      replicas: 2 # Avviamo due istanze del servizio di analisi
-    # Rimuoviamo 'ports' dall'analysis-service. Non deve essere esposto
-    # all'host, la comunicazione avviene internamente tramite la rete Docker.
+      replicas: 5
+      restart_policy:
+        condition: on-failure
     environment:
       - CONSUL_ADDR=consul:8500
       - STORAGE_SERVICE_NAME=storage-service
       - GRPC_PORT=50053
-      - INFERENCE_SERVICE_ADDR=http://inference:5000/predict
       - JAEGER_ADDR=jaeger:4317
+      - INFERENCE_SERVICE_NAME=inference-service
     depends_on:
       storage:
         condition: service_healthy
       consul:
         condition: service_healthy
       inference:
-        condition: service_started
+        condition: service_healthy
       jaeger:
         condition: service_started
     healthcheck:
       test: [ "CMD", "/grpc_health_probe", "-addr=:50053" ]
       interval: 10s
-      timeout: 1s
+      timeout: 2s
       retries: 5
       start_period: 15s
     networks:
       - ids-net
-  
+
   storage:
     build:
       context: .
       dockerfile: services/storage/Dockerfile
     environment:
-      # AGGIUNTO: Anche lo storage ha bisogno di sapere dove si trova Consul per registrarsi.
       - CONSUL_ADDR=consul:8500
       - GRPC_PORT=50052
       - INFLUXDB_URL=http://influxdb:8086
@@ -98,7 +109,7 @@ services:
       - JAEGER_ADDR=jaeger:4317
     depends_on:
       influxdb:
-        condition: service_started # InfluxDB non ha un healthcheck semplice, quindi aspettiamo solo l'avvio
+        condition: service_started
       consul:
         condition: service_healthy
       jaeger:
@@ -130,7 +141,7 @@ services:
       - ids-net
 
   grafana:
-    image: grafana/grafana:9.5.1
+    image: grafana/grafana:latest
     platform: linux/amd64
     container_name: grafana
     ports:
@@ -142,21 +153,22 @@ services:
     networks:
       - ids-net
 
-
   jaeger:
-    image: jaegertracing/all-in-one:1.53 # Usiamo una versione specifica
+    image: jaegertracing/all-in-one:1.53
     platform: linux/amd64
     container_name: jaeger
     ports:
-      - "16686:16686"  # Porta per l'interfaccia web di Jaeger
-      - "4317:4317"    # Porta per ricevere le tracce via gRPC (formato OTLP)
-      - "4318:4318"    # Porta per ricevere le tracce via HTTP (formato OTLP)
+      - "16686:16686"
+      - "4317:4317"
+      - "4318:4318"
     networks:
       - ids-net
     environment:
-      - COLLECTOR_OTLP_ENABLED=true # Abilita il ricevitore OpenTelemetry
+      - COLLECTOR_OTLP_ENABLED=true
       - SPAN_STORAGE_TYPE=memory
-      - MEMORY_DEPENDENCY_LOOKBACK=2m
+      # Ho aumentato leggermente il lookback per vedere meglio le dipendenze
+      - MEMORY_DEPENDENCY_LOOKBACK=4m
+
 volumes:
   influxdb-data:
   grafana-data:

@@ -35,64 +35,59 @@ type server struct {
 }
 
 func (s *server) StoreMetric(ctx context.Context, in *pb.Metric) (*pb.StorageResponse, error) {
-	// Creiamo un punto per la metrica
+	// Creiamo UN SOLO punto per la metrica, identificato dal suo timestamp e client_id
 	p := influxdb2.NewPointWithMeasurement(in.Type).
 		AddTag("client_id", in.SourceClientId).
 		SetTime(time.Unix(in.Timestamp, 0))
 
-	// --- NUOVA LOGICA ---
-	// Aggiungiamo ogni feature come un campo separato.
-	// Diamo loro nomi significativi.
+	// Controlliamo se la metrica ha le feature complete
 	if len(in.Features) == 41 {
-		p.AddField("duration", in.Features[0])
-		p.AddField("protocol_type", in.Features[1]) // Sarà un float, ma va bene
-		p.AddField("service", in.Features[2])
-		p.AddField("flag", in.Features[3])
-		p.AddField("src_bytes", in.Features[4])
-		p.AddField("dst_bytes", in.Features[5])
-		// ... potremmo aggiungerli tutti, ma per ora bastano i più importanti
-		p.AddField("count", in.Features[22])
-		p.AddField("srv_count", in.Features[23])
-		p.AddField("serror_rate", in.Features[24])
-		p.AddField("srv_serror_rate", in.Features[25])
+		// --- MODIFICA CHIAVE ---
+		// Aggiungiamo OGNI feature come un CAMPO SEPARATO allo STESSO punto.
+		// Diamo loro nomi significativi per poterli usare nelle query.
+		p.AddField("duration", float64(in.Features[0]))
+		p.AddField("protocol_type", float64(in.Features[1]))
+		p.AddField("service", float64(in.Features[2]))
+		p.AddField("flag", float64(in.Features[3]))
+		p.AddField("src_bytes", float64(in.Features[4]))
+		p.AddField("dst_bytes", float64(in.Features[5]))
+		// ... potremmo aggiungerle tutte e 41, ma queste sono sufficienti per i test
+		p.AddField("count", float64(in.Features[22]))
+		p.AddField("srv_count", float64(in.Features[23]))
+		p.AddField("serror_rate", float64(in.Features[24]))
+		p.AddField("srv_serror_rate", float64(in.Features[25]))
 	} else {
-		// Fallback per le metriche semplici senza features
+		// Fallback per le metriche semplici senza le 41 feature
 		p.AddField("value", in.Value)
 	}
 
+	// Scriviamo il punto singolo (che ora contiene più campi)
 	s.influxWriteAPI.WritePoint(p)
 	log.Printf("Stored metric from %s", in.SourceClientId)
 	return &pb.StorageResponse{Success: true, Message: "Metric stored"}, nil
 }
 
+// --- FUNZIONE StoreAlarm CORRETTA ---
 func (s *server) StoreAlarm(ctx context.Context, in *pb.Alarm) (*pb.StorageResponse, error) {
-	// Creiamo un punto per l'allarme
+	// Creiamo UN SOLO punto per l'allarme
 	p := influxdb2.NewPointWithMeasurement("alarm").
-		AddTag("rule_id", in.RuleId).
+		AddTag("rule_id", in.RuleId). // Aggiungiamo la regola come TAG per poter raggruppare!
 		AddTag("client_id", in.ClientId).
 		SetTime(time.Unix(in.Timestamp, 0))
 
-	// --- LOGICA AGGIORNATA ---
-	// Aggiungiamo la descrizione e le feature della metrica che ha causato l'allarme
-
+	// Aggiungiamo i dettagli dell'allarme come CAMPI
 	p.AddField("description", in.Description)
 
-	// Controlliamo che la metrica trigger sia presente e abbia le feature
-	if in.TriggerMetric != nil && len(in.TriggerMetric.Features) == 41 {
-		features := in.TriggerMetric.Features
-		p.AddField("trigger_duration", features[0])
-		p.AddField("trigger_protocol_type", features[1])
-		p.AddField("trigger_service", features[2])
-		p.AddField("trigger_flag", features[3])
-		p.AddField("trigger_src_bytes", features[4]) // Questo sarà il nostro 'Valore Anomalo'
-		p.AddField("trigger_dst_bytes", features[5])
-		p.AddField("trigger_count", features[22])
-		p.AddField("trigger_serror_rate", features[24])
+	// Se l'allarme contiene la metrica che l'ha scatenato, salviamo anche alcune sue feature
+	if in.TriggerMetric != nil && len(in.TriggerMetric.Features) > 0 {
+		p.AddField("trigger_src_bytes", float64(in.TriggerMetric.Features[4]))
+		p.AddField("trigger_count", float64(in.TriggerMetric.Features[22]))
+		p.AddField("trigger_serror_rate", float64(in.TriggerMetric.Features[24]))
 	} else if in.TriggerMetric != nil {
-		// Fallback per allarmi generati da metriche semplici
 		p.AddField("trigger_value", in.TriggerMetric.Value)
 	}
 
+	// Scriviamo il punto singolo nel bucket degli allarmi
 	s.influxWriteAPIAlarms.WritePoint(p)
 
 	log.Printf("Stored ALARM for client %s, rule %s", in.ClientId, in.RuleId)

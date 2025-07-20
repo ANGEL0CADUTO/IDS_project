@@ -6,7 +6,8 @@ import (
 	"log"
 	"net"
 	"os"
-	"sync" // <-- NUOVO IMPORT
+	"strconv" // Import necessario per convertire la porta
+	"sync"
 	"time"
 
 	"github.com/ANGEL0CADUTO/IDS_project/pkg/consul"
@@ -14,24 +15,21 @@ import (
 	pb "github.com/ANGEL0CADUTO/IDS_project/proto"
 	consulapi "github.com/hashicorp/consul/api"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
-	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/health"                // Import per il server di health check
+	"google.golang.org/grpc/health/grpc_health_v1" // Import per il server di health check
 )
 
-// --- MODIFICA 1: La struct del server ora contiene un pool di connessioni ---
 type server struct {
 	pb.UnimplementedMetricsCollectorServer
 	consulClient        *consulapi.Client
 	analysisServiceName string
-
-	// Pool di connessioni per le istanze di analysis-service
-	analysisConns   map[string]*grpc.ClientConn
-	analysisConnsMu sync.RWMutex // Mutex per proteggere l'accesso alla mappa
+	analysisConns       map[string]*grpc.ClientConn
+	analysisConnsMu     sync.RWMutex
 }
 
 func (s *server) getAnalysisClient(ctx context.Context) (pb.AnalysisServiceClient, error) {
-	// ... la logica di discovery e selezione dell'indirizzo rimane uguale ...
 	analysisAddrs, err := consul.DiscoverAllServices(s.consulClient, s.analysisServiceName)
 	if err != nil || len(analysisAddrs) == 0 {
 		return nil, fmt.Errorf("could not discover any healthy analysis service: %v", err)
@@ -54,8 +52,6 @@ func (s *server) getAnalysisClient(ctx context.Context) (pb.AnalysisServiceClien
 	}
 
 	log.Printf("Creating new gRPC connection to analysis service at %s", targetAddr)
-	// --- L'UNICA MODIFICA È QUI ---
-	// Usiamo grpc.Dial invece di grpc.DialContext. La connessione è agnostica alla richiesta.
 	conn, err = grpc.Dial(targetAddr,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithBlock(),
@@ -69,20 +65,7 @@ func (s *server) getAnalysisClient(ctx context.Context) (pb.AnalysisServiceClien
 	return pb.NewAnalysisServiceClient(conn), nil
 }
 
-// in services/collector/main.go
-
 func (s *server) SendMetric(ctx context.Context, in *pb.Metric) (*pb.CollectorResponse, error) {
-	// --- DEBUG LOG 1: Controlliamo lo span in entrata ---
-	span := trace.SpanFromContext(ctx)
-	if span.SpanContext().IsValid() {
-		log.Printf("[DEBUG] Collector: Received span. TraceID: %s, SpanID: %s",
-			span.SpanContext().TraceID().String(),
-			span.SpanContext().SpanID().String(),
-		)
-	} else {
-		log.Printf("[DEBUG] Collector: Received a request without a valid span.")
-	}
-
 	log.Printf("Received metric from %s.", in.SourceClientId)
 
 	analysisClient, err := s.getAnalysisClient(ctx)
@@ -93,15 +76,6 @@ func (s *server) SendMetric(ctx context.Context, in *pb.Metric) (*pb.CollectorRe
 
 	ctxWithTimeout, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-
-	// --- DEBUG LOG 2: Controlliamo lo span prima della chiamata in uscita ---
-	spanForCall := trace.SpanFromContext(ctxWithTimeout)
-	if spanForCall.SpanContext().IsValid() {
-		log.Printf("[DEBUG] Collector: Making outbound call. TraceID: %s, SpanID: %s",
-			spanForCall.SpanContext().TraceID().String(),
-			spanForCall.SpanContext().SpanID().String(),
-		)
-	}
 
 	analysisResp, err := analysisClient.AnalyzeMetric(ctxWithTimeout, in)
 	if err != nil {
@@ -118,10 +92,15 @@ func (s *server) SendMetric(ctx context.Context, in *pb.Metric) (*pb.CollectorRe
 }
 
 func main() {
-	// ... (La parte di inizializzazione con tracer, consul, etc. è identica a prima)
 	consulAddr := getEnv("CONSUL_ADDR", "localhost:8500")
 	jaegerAddr := getEnv("JAEGER_ADDR", "localhost:4317")
 	serviceName := "collector-service"
+	portStr := getEnv("GRPC_PORT", "50051")
+	// --- MODIFICA 1: Converti la porta in un intero per la registrazione a Consul ---
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		log.Fatalf("Porta non valida: %v", err)
+	}
 
 	tp, err := tracing.InitTracerProvider(context.Background(), serviceName, jaegerAddr)
 	if err != nil {
@@ -133,15 +112,24 @@ func main() {
 		}
 	}()
 
+	// --- MODIFICA 2: Registra il servizio a Consul all'avvio ---
+	log.Println("Registrazione a Consul...")
+	serviceID := fmt.Sprintf("%s-%s", serviceName, os.Getenv("HOSTNAME"))
+	// NOTA: Usiamo il client restituito da RegisterService solo per la de-registrazione.
+	// Il client per la service discovery viene creato separatamente sotto.
+	consulClientForRegistration := consul.RegisterService(consulAddr, serviceName, serviceID, port)
+	defer consul.DeregisterService(consulClientForRegistration, serviceID)
+	log.Println("Registrato a Consul con successo.")
+
+	// Creazione del client Consul per la Service Discovery (logica esistente)
 	config := consulapi.DefaultConfig()
 	config.Address = consulAddr
-	consulClient, err := consulapi.NewClient(config)
+	consulClientForDiscovery, err := consulapi.NewClient(config)
 	if err != nil {
-		log.Fatalf("Failed to create consul client: %v", err)
+		log.Fatalf("Failed to create consul client for discovery: %v", err)
 	}
 	analysisServiceName := getEnv("ANALYSIS_SERVICE_NAME", "analysis-service")
 
-	portStr := getEnv("GRPC_PORT", "50051")
 	lis, err := net.Listen("tcp", ":"+portStr)
 	if err != nil {
 		log.Fatalf("failed to listen: %v", err)
@@ -156,12 +144,16 @@ func main() {
 		),
 	)
 
-	// --- MODIFICA 3: Inizializziamo il server con il pool di connessioni vuoto ---
+	// Inizializza il server con il pool di connessioni e il client per la discovery
 	pb.RegisterMetricsCollectorServer(s, &server{
-		consulClient:        consulClient,
+		consulClient:        consulClientForDiscovery,
 		analysisServiceName: analysisServiceName,
-		analysisConns:       make(map[string]*grpc.ClientConn), // Inizializza la mappa
+		analysisConns:       make(map[string]*grpc.ClientConn),
 	})
+
+	// --- MODIFICA 3: Registra il servizio di health check ---
+	// Questo è fondamentale per permettere a Consul di verificare se il servizio è sano.
+	grpc_health_v1.RegisterHealthServer(s, health.NewServer())
 
 	log.Printf("Collector service listening at %v", lis.Addr())
 	if err := s.Serve(lis); err != nil {

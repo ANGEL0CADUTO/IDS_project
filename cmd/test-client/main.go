@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math/rand"
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	pb "github.com/ANGEL0CADUTO/IDS_project/proto"
@@ -101,67 +103,99 @@ func recordToFeatures(record []string) ([]float32, error) {
 }
 
 func main() {
+	const numClients = 5
 	buildCategoricalMaps(trainFilePath)
+	var wg sync.WaitGroup
 
-	conn, err := grpc.Dial(address, grpc.WithTransportCredentials(insecure.NewCredentials()))
-	if err != nil {
-		log.Fatalf("did not connect: %v", err)
+	for i := 1; i <= numClients; i++ {
+		wg.Add(1)
+		go func(clientID int) {
+			defer wg.Done()
+
+			log.Printf("[Client %d] Avvio...", clientID)
+
+			// ... (connessione gRPC rimane uguale)
+			conn, err := grpc.Dial(address, grpc.WithTransportCredentials(insecure.NewCredentials()))
+			if err != nil {
+				log.Printf("[Client %d] Errore di connessione: %v", clientID, err)
+				return
+			}
+			defer conn.Close()
+			c := pb.NewMetricsCollectorClient(conn)
+
+			file, err := os.Open(testFilePath)
+			if err != nil {
+				log.Printf("[Client %d] Impossibile aprire il file di test %s: %v", clientID, testFilePath, err)
+				return
+			}
+			defer file.Close()
+			reader := csv.NewReader(file)
+			reader.Comment = '@'
+
+			// --- INIZIO LOGICA MODIFICATA ---
+
+			// Definiamo quali client sono "rumorosi"
+			isNoisyClient := (clientID == 1 || clientID == 3) // Ad esempio, il client 1 e 3
+
+			for j := 0; j < 10000; j++ {
+				record, err := reader.Read()
+				if err == io.EOF {
+					break
+				}
+				if err != nil {
+					continue
+				}
+
+				label := "unknown"
+				if len(record) > 41 {
+					label = record[41]
+				}
+
+				// Logica di invio differenziata
+				// I client rumorosi inviano sempre i dati etichettati come attacchi.
+				// Gli altri client inviano preferenzialmente i dati etichettati come normali.
+				if isNoisyClient {
+					// Se questo client è rumoroso, cerca un record di attacco da inviare
+					if label == "normal" {
+						continue // Salta questo record e passa al prossimo
+					}
+				} else {
+					// Se questo client è "benigno", cerca un record normale da inviare
+					if label != "normal" {
+						continue // Salta questo record e passa al prossimo
+					}
+				}
+
+				features, err := recordToFeatures(record)
+				if err != nil {
+					continue
+				}
+
+				sourceID := fmt.Sprintf("concurrent-client-%d", clientID)
+				metric := &pb.Metric{
+					SourceClientId: sourceID,
+					Type:           "network_traffic",
+					Value:          float64(features[4]),
+					Timestamp:      time.Now().Unix(),
+					Features:       features,
+				}
+
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				resp, err := c.SendMetric(ctx, metric)
+				if err != nil {
+					log.Printf("[Client %d] Impossibile inviare metrica: %v", clientID, err)
+				} else {
+					log.Printf("[Client %d] Invio record (Etichetta: %s) -> Risposta: %s", clientID, label, resp.Message)
+				}
+				cancel()
+
+				time.Sleep(time.Duration(500+rand.Intn(500)) * time.Millisecond)
+			}
+			log.Printf("[Client %d] Invio completato.", clientID)
+			// --- FINE LOGICA MODIFICATA ---
+		}(i)
 	}
-	defer conn.Close()
-	c := pb.NewMetricsCollectorClient(conn)
 
-	file, err := os.Open(testFilePath)
-	if err != nil {
-		log.Fatalf("Impossibile aprire il file di test %s: %v", testFilePath, err)
-	}
-	defer file.Close()
-
-	reader := csv.NewReader(file)
-	reader.Comment = '@'
-
-	log.Printf("Inizio invio dati dal file di test: %s", testFilePath)
-
-	for {
-		record, err := reader.Read()
-		if err == io.EOF {
-			log.Println("Fine del file di test raggiunto. Il generatore si ferma.")
-			break
-		}
-		if err != nil {
-			log.Printf("Riga saltata nel file di test (errore CSV): %v", err)
-			continue
-		}
-
-		features, err := recordToFeatures(record)
-		if err != nil {
-			log.Printf("Riga saltata (conversione fallita): %v", err)
-			continue
-		}
-
-		metric := &pb.Metric{
-			SourceClientId: "kdd-test-generator",
-			Type:           "network_traffic",
-			Value:          float64(features[4]),
-			Timestamp:      time.Now().Unix(),
-			Features:       features,
-		}
-
-		// La penultima colonna (indice 41) è l'etichetta
-		label := "unknown"
-		if len(record) > 41 {
-			label = record[41]
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		// SALVIAMO LA RISPOSTA NELLA VARIABILE 'resp'
-		resp, err := c.SendMetric(ctx, metric)
-		if err != nil {
-			log.Printf("could not send metric: %v", err)
-		} else {
-			// ...E STAMPIAMO TUTTO INSIEME!
-			log.Printf("Invio record (Etichetta: %s) -> Predizione del sistema: %s", label, resp.Message)
-		}
-		cancel()
-
-		time.Sleep(500 * time.Millisecond)
-	}
+	wg.Wait()
+	log.Println("Tutti i client hanno terminato.")
 }

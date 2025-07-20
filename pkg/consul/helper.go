@@ -18,8 +18,6 @@ func RegisterService(consulAddr, serviceName, serviceID string, servicePort int)
 		log.Fatalf("Failed to create consul client: %v", err)
 	}
 
-	// NOTA: In un ambiente containerizzato, l'hostname è un indirizzo affidabile
-	// per la comunicazione interna alla rete Docker.
 	hostname, _ := os.Hostname()
 	serviceAddr := hostname
 
@@ -45,37 +43,63 @@ func RegisterService(consulAddr, serviceName, serviceID string, servicePort int)
 	return client
 }
 
-// DiscoverService è una funzione di convenienza che usa DiscoverAllServices e restituisce solo il primo indirizzo.
+// --- INIZIO BLOCCO CORRETTO ---
+
+// DiscoverService interroga Consul per trovare l'indirizzo di un altro servizio.
 // Utile per i servizi che necessitano di connettersi a un singleton.
 func DiscoverService(client *consulapi.Client, serviceName string) (string, error) {
-	addrs, err := DiscoverAllServices(client, serviceName)
-	if err != nil {
-		return "", err
+	const maxRetries = 15
+	var lastErr error
+
+	for i := 0; i < maxRetries; i++ {
+		// La funzione Health().Service() restituisce una lista di istanze sane
+		services, _, err := client.Health().Service(serviceName, "", true, nil)
+		if err != nil {
+			lastErr = fmt.Errorf("failed to query consul for service '%s': %w", serviceName, err)
+			log.Printf("Retrying discovery for '%s' in 2 seconds... (Attempt %d/%d)", serviceName, i+1, maxRetries)
+			time.Sleep(2 * time.Second)
+			continue
+		}
+
+		// Se troviamo almeno un'istanza sana, prendiamo la prima e usciamo.
+		if len(services) > 0 {
+			// 'service' qui è di tipo *api.ServiceEntry
+			service := services[0].Service
+			addr := fmt.Sprintf("%s:%d", service.Address, service.Port)
+			log.Printf("Successfully discovered service '%s' at %s", serviceName, addr)
+			return addr, nil
+		}
+
+		lastErr = fmt.Errorf("no healthy instances found for service '%s'", serviceName)
+		log.Printf("Retrying discovery for '%s' in 2 seconds... (Attempt %d/%d)", serviceName, i+1, maxRetries)
+		time.Sleep(2 * time.Second)
 	}
-	return addrs[0], nil
+
+	return "", lastErr
 }
 
 // DiscoverAllServices interroga Consul per trovare TUTTI gli indirizzi sani di un servizio.
 // Questa è la funzione chiave per il load balancing.
 func DiscoverAllServices(client *consulapi.Client, serviceName string) ([]string, error) {
+	const maxRetries = 15
 	var lastErr error
-	// Ciclo di retry per attendere che almeno un servizio sia disponibile
-	for i := 0; i < 5; i++ {
-		// Il terzo parametro 'true' filtra per i soli servizi 'passing' (sani)
+
+	for i := 0; i < maxRetries; i++ {
 		services, _, err := client.Health().Service(serviceName, "", true, nil)
 		if err != nil {
 			lastErr = fmt.Errorf("failed to query consul for service '%s': %w", serviceName, err)
-			log.Printf("Retrying discovery for '%s' in 2 seconds...", serviceName)
+			log.Printf("Retrying discovery for '%s' in 2 seconds... (Attempt %d/%d)", serviceName, i+1, maxRetries)
 			time.Sleep(2 * time.Second)
 			continue
 		}
 
 		if len(services) > 0 {
 			var addrs []string
-			for _, service := range services {
-				// Costruiamo l'indirizzo usando l'Address del servizio, che Consul
-				// sa risolvere correttamente all'interno della rete Docker.
-				addr := fmt.Sprintf("%s:%d", service.Service.Address, service.Service.Port)
+			// Qui cicliamo su TUTTE le istanze trovate
+			for _, serviceEntry := range services {
+				// 'serviceEntry' è di tipo *api.ServiceEntry, quindi accediamo a .Service
+				service := serviceEntry.Service
+				addr := fmt.Sprintf("%s:%d", service.Address, service.Port)
 				addrs = append(addrs, addr)
 			}
 			log.Printf("Successfully discovered %d healthy instances for service '%s': %v", len(addrs), serviceName, addrs)
@@ -83,12 +107,14 @@ func DiscoverAllServices(client *consulapi.Client, serviceName string) ([]string
 		}
 
 		lastErr = fmt.Errorf("no healthy instances found for service '%s'", serviceName)
-		log.Printf("Retrying discovery for '%s' in 2 seconds...", serviceName)
+		log.Printf("Retrying discovery for '%s' in 2 seconds... (Attempt %d/%d)", serviceName, i+1, maxRetries)
 		time.Sleep(2 * time.Second)
 	}
 
 	return nil, lastErr
 }
+
+// --- FINE BLOCCO CORRETTO ---
 
 // DeregisterService si deregistra da Consul
 func DeregisterService(client *consulapi.Client, serviceID string) {

@@ -1,0 +1,22 @@
+syntax = "proto3";
+
+package proto;
+
+option go_package = "github.com/ANGEL0CADUTO/IDS_project/proto";
+
+// Il servizio che l'Inference Service espone
+service Inference {
+  // RPC per ottenere una predizione da un set di feature
+  rpc Predict(InferenceRequest) returns (InferenceResponse);
+}
+
+// Messaggio per la richiesta di inferenza
+message InferenceRequest {
+  repeated float features = 1;
+}
+
+// Messaggio per la risposta di inferenza
+message InferenceResponse {
+  // La predizione del modello (-1 per anomalia, 1 per normale)
+  int32 prediction = 1;
+}

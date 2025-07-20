@@ -1,0 +1,13 @@
+# Git
+.git
+.gitignore
+
+# IDE
+.idea
+*.iml
+
+# Eseguibili locali
+*.exe
+
+# File del sistema operativo
+.DS_Store
