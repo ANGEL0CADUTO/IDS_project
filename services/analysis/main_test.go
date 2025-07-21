@@ -12,6 +12,7 @@ import (
 	"google.golang.org/grpc"
 )
 
+// --- Mock e Strutture di Supporto (Corretti) ---
 type mockStorageClient struct {
 	pb.StorageClient
 	storeMetricCalledCount int
@@ -35,24 +36,28 @@ type mockInferenceClient struct {
 	prediction int32
 }
 
+// CORREZIONE: La risposta del mock non contiene più il campo 'Label'
 func (m *mockInferenceClient) Predict(ctx context.Context, in *pb.InferenceRequest, opts ...grpc.CallOption) (*pb.InferenceResponse, error) {
-	if m.prediction == 0 { // Usiamo 0 per indicare un fallimento
+	if m.prediction == 0 {
 		return nil, errors.New("simulated inference failure")
 	}
+	// Restituisce solo il campo 'prediction', come fa il vero servizio Python
 	return &pb.InferenceResponse{Prediction: m.prediction}, nil
 }
 
-// Test per una metrica normale che deve essere salvata correttamente.
+// --- TEST AGGIORNATI ---
+
 func TestAnalyzeMetric_NormalMetric(t *testing.T) {
 	// Setup
 	mockStore := &mockStorageClient{}
+	// CORREZIONE: Il mock non ha più bisogno del campo 'label'
 	mockInference := &mockInferenceClient{prediction: 1} // 1 = Normale
 
 	analysisServer := &server{
 		storageClient:     mockStore,
 		inferenceClient:   mockInference,
 		circuitBreaker:    gobreaker.NewCircuitBreaker(gobreaker.Settings{}),
-		suspiciousClients: make(map[string][]time.Time), // Inizializziamo la mappa!
+		suspiciousClients: make(map[string][]time.Time),
 		mu:                sync.Mutex{},
 	}
 
@@ -73,9 +78,12 @@ func TestAnalyzeMetric_NormalMetric(t *testing.T) {
 	}
 }
 
-// Test per verificare che un allarme scatti solo dopo aver superato la soglia.
 func TestAnalyzeMetric_TriggersAlarm_AfterThreshold(t *testing.T) {
-	// Setup
+	// --- SETUP: Impostiamo le variabili globali usate dalla funzione ---
+	anomalyThreshold = 3
+	timeWindow = 1 * time.Minute
+
+	// Setup dei mock
 	mockStore := &mockStorageClient{}
 	mockInference := &mockInferenceClient{prediction: -1} // -1 = Anomalia
 
@@ -83,15 +91,13 @@ func TestAnalyzeMetric_TriggersAlarm_AfterThreshold(t *testing.T) {
 		storageClient:     mockStore,
 		inferenceClient:   mockInference,
 		circuitBreaker:    gobreaker.NewCircuitBreaker(gobreaker.Settings{}),
-		suspiciousClients: make(map[string][]time.Time), // Inizializziamo la mappa!
+		suspiciousClients: make(map[string][]time.Time),
 		mu:                sync.Mutex{},
 	}
 
 	anomalousMetric := &pb.Metric{SourceClientId: "test-client", Features: make([]float32, 41)}
 
-	// Esecuzione: Simuliamo 3 chiamate anomale.
-	// Le prime 2 dovrebbero solo registrare la metrica come sospetta.
-	// La terza dovrebbe far scattare l'allarme.
+	// Esecuzione
 	for i := 1; i <= 3; i++ {
 		_, err := analysisServer.AnalyzeMetric(context.Background(), anomalousMetric)
 		if err != nil {
@@ -100,23 +106,24 @@ func TestAnalyzeMetric_TriggersAlarm_AfterThreshold(t *testing.T) {
 	}
 
 	// Verifica
-	// Le prime 2 anomalie vengono salvate come metriche "sospette".
 	if mockStore.storeMetricCalledCount != 2 {
 		t.Errorf("StoreMetric doveva essere chiamato 2 volte per le metriche sospette, ma è stato chiamato %d volte", mockStore.storeMetricCalledCount)
 	}
-	// La terza anomalia fa scattare l'allarme.
 	if mockStore.storeAlarmCalledCount != 1 {
 		t.Errorf("StoreAlarm doveva essere chiamato 1 volta, ma è stato chiamato %d volte", mockStore.storeAlarmCalledCount)
 	}
 }
 
-// Test per verificare che la logica di fallback funzioni e attivi la corroborazione.
 func TestAnalyzeMetric_Fallback_TriggersAlarm_AfterThreshold(t *testing.T) {
-	// Setup
+	// --- SETUP: Impostiamo le variabili globali ---
+	anomalyThreshold = 3
+	timeWindow = 1 * time.Minute
+	fallbackThreshold = 95.0
+
+	// Setup dei mock
 	mockStore := &mockStorageClient{}
 	mockInference := &mockInferenceClient{prediction: 0} // 0 = Fallimento
 
-	// Apriamo il circuit breaker artificialmente per forzare il fallback
 	cb := gobreaker.NewCircuitBreaker(gobreaker.Settings{})
 	for i := 0; i < 10; i++ {
 		_, _ = cb.Execute(func() (interface{}, error) { return nil, errors.New("fail") })
@@ -129,15 +136,17 @@ func TestAnalyzeMetric_Fallback_TriggersAlarm_AfterThreshold(t *testing.T) {
 		storageClient:     mockStore,
 		inferenceClient:   mockInference,
 		circuitBreaker:    cb,
-		suspiciousClients: make(map[string][]time.Time), // Inizializziamo la mappa!
+		suspiciousClients: make(map[string][]time.Time),
 		mu:                sync.Mutex{},
 	}
 
-	// Questa metrica attiverà la soglia del fallback (src_bytes > 95.0)
 	metricForFallback := &pb.Metric{SourceClientId: "test-client", Features: make([]float32, 41)}
+	// NOTA: Il test precedente non impostava 'Value', ora lo facciamo per coerenza
+	// anche se il codice attuale lo prende da Features[4]
+	metricForFallback.Value = 100.0
 	metricForFallback.Features[4] = 100.0
 
-	// Esecuzione: 3 chiamate per superare la soglia di corroborazione
+	// Esecuzione
 	for i := 1; i <= 3; i++ {
 		_, err := analysisServer.AnalyzeMetric(context.Background(), metricForFallback)
 		if err != nil {
@@ -152,7 +161,8 @@ func TestAnalyzeMetric_Fallback_TriggersAlarm_AfterThreshold(t *testing.T) {
 	if mockStore.storeAlarmCalledCount != 1 {
 		t.Errorf("StoreAlarm doveva essere chiamato 1 volta, ma è stato chiamato %d volte", mockStore.storeAlarmCalledCount)
 	}
-	if mockStore.lastAlarm.RuleId != "anomaly_by_threshold_(fallback)" {
-		t.Errorf("L'allarme doveva essere di tipo fallback, ma è '%s'", mockStore.lastAlarm.RuleId)
+	expectedRuleId := "correlated_anomaly_by_threshold_(fallback)"
+	if mockStore.lastAlarm.RuleId != expectedRuleId {
+		t.Errorf("L'allarme doveva avere RuleId '%s', ma ha '%s'", expectedRuleId, mockStore.lastAlarm.RuleId)
 	}
 }

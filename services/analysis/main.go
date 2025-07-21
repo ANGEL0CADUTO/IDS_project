@@ -50,11 +50,13 @@ func (s *server) AnalyzeMetric(ctx context.Context, in *pb.Metric) (*pb.Analysis
 	analysisSource := ""
 
 	response, err := s.circuitBreaker.Execute(func() (interface{}, error) {
+		log.Println("[DEBUG] Chiamata al servizio di inferenza (dentro Circuit Breaker)...")
 		req := &pb.InferenceRequest{Features: in.Features}
 		return s.inferenceClient.Predict(ctx, req)
 	})
 
 	if err != nil {
+
 		log.Printf("WARN: CircuitBreaker is OPEN or inference call failed: %v. Falling back to threshold logic.", err)
 		analysisSource = "Threshold (Fallback)"
 		var triggerValue float64

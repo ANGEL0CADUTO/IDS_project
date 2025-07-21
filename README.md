@@ -48,6 +48,7 @@ Questo comando costruisce le immagini Docker (se non esistono) e avvia tutti i s
 
 ```bash
 make up
+```
 
 **2. Generare Traffico di Test:**
 Per popolare il sistema con dati, esegui il client di test. Il client simula 5 utenti concorrenti che inviano dati dal dataset NSL-KDD.

@@ -20,9 +20,7 @@ services:
       context: ./services/inference
     networks:
       - ids-net
-    deploy:
-      restart_policy:
-        condition: on-failure
+
     environment:
       - CONSUL_HOST=consul
       - CONSUL_PORT=8500

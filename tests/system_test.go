@@ -3,10 +3,14 @@ package tests
 import (
 	"context"
 	"fmt"
+	"os"
+	"strconv"
 	"testing"
 	"time"
 
 	pb "github.com/ANGEL0CADUTO/IDS_project/proto"
+	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/client"
 	influxdb2 "github.com/influxdata/influxdb-client-go/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -14,98 +18,80 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
-// Questi parametri devono corrispondere a quelli nel docker-compose.yml
-const (
-	collectorAddress = "localhost:50051"
-	influxURL        = "http://localhost:8086"
-	influxToken      = "password123" // Questo è il token di admin
-	influxOrg        = "ids-project"
-	influxBucket     = "metrics"
+var (
+	collectorAddress  = getEnv("COLLECTOR_ADDR", "localhost:50051")
+	influxURL         = getEnv("INFLUXDB_URL", "http://localhost:8086")
+	influxToken       = getEnv("INFLUXDB_TOKEN", "password123")
+	influxOrg         = getEnv("INFLUXDB_ORG", "ids-project")
+	metricsBucket     = "metrics"
+	alarmsBucket      = "alarms"
+	alarmThreshold, _ = strconv.Atoi(getEnv("ALARM_THRESHOLD", "4"))
 )
 
+func getEnv(key, fallback string) string {
+	if value, ok := os.LookupEnv(key); ok {
+		return value
+	}
+	return fallback
+}
+
+func connectToCollector(t *testing.T) (pb.MetricsCollectorClient, func()) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	conn, err := grpc.DialContext(ctx, collectorAddress,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithBlock(),
+	)
+	require.NoError(t, err, "Il test di sistema richiede che il Collector Service sia raggiungibile su %s", collectorAddress)
+	cleanup := func() {
+		conn.Close()
+		cancel()
+	}
+	return pb.NewMetricsCollectorClient(conn), cleanup
+}
+
 func TestSystem_HappyPath_MetricIsStored(t *testing.T) {
-	// Questo test si aspetta che l'intero stack sia in esecuzione (via docker compose up)
+	collectorClient, cleanup := connectToCollector(t)
+	defer cleanup()
 
-	// Fase 1: Setup - Connessione al Collector Service
-	conn, err := grpc.Dial(collectorAddress, grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithBlock())
-	require.NoError(t, err, "Il test di integrazione richiede che il Collector Service sia in esecuzione su %s", collectorAddress)
-	defer conn.Close()
-	collectorClient := pb.NewMetricsCollectorClient(conn)
-
-	// Fase 2: Azione - Invia una metrica unica per poterla ritrovare
-	uniqueClientID := fmt.Sprintf("integration-test-%d", time.Now().UnixNano())
+	uniqueClientID := fmt.Sprintf("integration-test-normal-%d", time.Now().UnixNano())
 	testMetric := &pb.Metric{
 		SourceClientId: uniqueClientID,
 		Type:           "network_traffic",
 		Timestamp:      time.Now().Unix(),
-		// Usiamo un set minimo di features per non dipendere dal modello ML
-		// e assicurarci che venga classificata come normale
-		Features: make([]float32, 41),
+		Features:       make([]float32, 41),
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	_, err := collectorClient.SendMetric(context.Background(), testMetric)
+	require.NoError(t, err)
 
-	_, err = collectorClient.SendMetric(ctx, testMetric)
-	require.NoError(t, err, "La chiamata SendMetric non doveva fallire")
-
-	// Diamo al sistema un secondo per processare e scrivere il dato
 	time.Sleep(2 * time.Second)
-
-	// Fase 3: Verifica - Controlliamo direttamente su InfluxDB
-	influxClient := influxdb2.NewClient(influxURL, influxToken)
-	queryAPI := influxClient.QueryAPI(influxOrg)
-
-	// Creiamo una query Flux per trovare esattamente la nostra metrica
-	query := fmt.Sprintf(`
-		from(bucket: "%s")
-		|> range(start: -1m)
-		|> filter(fn: (r) => r._measurement == "network_traffic")
-		|> filter(fn: (r) => r.client_id == "%s")
-		|> count()
-	`, influxBucket, uniqueClientID)
-
-	result, err := queryAPI.Query(context.Background(), query)
-	require.NoError(t, err, "La query su InfluxDB non doveva fallire")
-
-	// Verifichiamo il risultato
-	found := false
-	for result.Next() {
-		if result.Record().Value().(int64) > 0 {
-			found = true
-		}
-	}
-
-	assert.True(t, found, "La metrica inviata con client_id %s non è stata trovata in InfluxDB", uniqueClientID)
-
-	influxClient.Close()
-}
-
-// in tests/system_test.go
-
-// TestSystem_AnomalyPath_AlarmIsStored verifica che una metrica anomala
-// generi un allarme nel bucket corretto.
-func TestSystem_AnomalyPath_AlarmIsStored(t *testing.T) {
-	// Fase 1: Setup - Connessioni a Collector e InfluxDB
-	conn, err := grpc.Dial(collectorAddress, grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithBlock())
-	require.NoError(t, err, "Collector Service deve essere in esecuzione")
-	defer conn.Close()
-	collectorClient := pb.NewMetricsCollectorClient(conn)
 
 	influxClient := influxdb2.NewClient(influxURL, influxToken)
 	defer influxClient.Close()
 	queryAPI := influxClient.QueryAPI(influxOrg)
 
-	// Il bucket degli allarmi
-	const influxAlarmsBucket = "alarms"
+	query := fmt.Sprintf(`from(bucket: "%s") |> range(start: -1m) |> filter(fn: (r) => r._measurement == "network_traffic" and r.client_id == "%s") |> count()`, metricsBucket, uniqueClientID)
+	result, err := queryAPI.Query(context.Background(), query)
+	require.NoError(t, err)
 
-	// Fase 2: Azione - Invia una metrica che è quasi certamente un'anomalia
-	// Il dataset NSL-KDD ha molti attacchi di tipo "neptune" (Denial of Service)
-	// che sono facilmente riconoscibili dal modello. Usiamo i valori di un record "neptune".
+	found := false
+	if result.Next() && result.Record().Value() != nil && result.Record().Value().(int64) > 0 {
+		found = true
+	}
+	assert.True(t, found, "La metrica inviata non è stata trovata in InfluxDB")
+}
+
+func TestSystem_AnomalyPath_AlarmIsStoredAfterCorrelation(t *testing.T) {
+	collectorClient, cleanup := connectToCollector(t)
+	defer cleanup()
+
+	influxClient := influxdb2.NewClient(influxURL, influxToken)
+	defer influxClient.Close()
+	queryAPI := influxClient.QueryAPI(influxOrg)
+
 	uniqueClientID := fmt.Sprintf("integration-test-anomaly-%d", time.Now().UnixNano())
-	// Valori presi da un tipico record di attacco 'neptune'
 	anomalousFeatures := []float32{0, 1, 19, 5, 0, 0, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 240, 19, 1, 1, 0.08, 0.08, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
-
 	testMetric := &pb.Metric{
 		SourceClientId: uniqueClientID,
 		Type:           "network_traffic",
@@ -113,115 +99,97 @@ func TestSystem_AnomalyPath_AlarmIsStored(t *testing.T) {
 		Features:       anomalousFeatures,
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	t.Logf("Invio di %d metriche sospette (sotto la soglia)...", alarmThreshold-1)
+	for i := 0; i < alarmThreshold-1; i++ {
+		resp, err := collectorClient.SendMetric(context.Background(), testMetric)
+		require.NoError(t, err)
+		assert.Contains(t, resp.Message, "Suspicious metric recorded", "La risposta doveva indicare metrica sospetta")
+	}
 
-	resp, err := collectorClient.SendMetric(ctx, testMetric)
-	require.NoError(t, err, "La chiamata SendMetric non doveva fallire")
-	// Verifichiamo che la risposta indichi un'anomalia
-	assert.Contains(t, resp.Message, "Anomaly detected", "La risposta del collector doveva indicare un'anomalia")
-
-	// Diamo al sistema il tempo di processare
-	time.Sleep(2 * time.Second)
-
-	// Fase 3: Verifica - Controlliamo il bucket 'alarms' su InfluxDB
-	query := fmt.Sprintf(`
-		from(bucket: "%s")
-		|> range(start: -1m)
-		|> filter(fn: (r) => r._measurement == "alarm")
-		|> filter(fn: (r) => r.client_id == "%s")
-		|> count()
-	`, influxAlarmsBucket, uniqueClientID)
-
+	query := fmt.Sprintf(`from(bucket: "%s") |> range(start: -1m) |> filter(fn: (r) => r.client_id == "%s") |> count()`, alarmsBucket, uniqueClientID)
 	result, err := queryAPI.Query(context.Background(), query)
-	require.NoError(t, err, "La query sul bucket 'alarms' non doveva fallire")
-
+	require.NoError(t, err)
 	found := false
-	for result.Next() {
-		if result.Record().Value().(int64) > 0 {
-			found = true
-		}
+	if result.Next() && result.Record().Value() != nil && result.Record().Value().(int64) > 0 {
+		found = true
 	}
+	assert.False(t, found, "NON doveva esserci un allarme prima del superamento della soglia")
 
-	assert.True(t, found, "Un allarme per il client_id %s doveva essere presente nel bucket 'alarms', ma non è stato trovato", uniqueClientID)
-}
+	t.Logf("Invio dell'ultima metrica per superare la soglia di %d...", alarmThreshold)
+	resp, err := collectorClient.SendMetric(context.Background(), testMetric)
+	require.NoError(t, err)
 
-// in tests/system_test.go
-
-// TestSystem_FaultTolerance_FallbackIsTriggered simula un guasto al servizio di inferenza
-// e verifica che il sistema continui a funzionare usando la logica di fallback.
-func TestSystem_FaultTolerance_FallbackIsTriggered(t *testing.T) {
-	// Questo test è più complesso perché deve interagire con Docker.
-	// Per semplicità, lo implementiamo come una sequenza di controlli manuali
-	// documentati, ma un test automatizzato userebbe la Docker SDK.
-	// Per ora, lo strutturiamo per essere eseguito manualmente.
-	t.Skip("Questo test richiede l'interazione manuale con Docker Compose. Eseguire i seguenti passaggi:\n" +
-		"1. Avviare lo stack con 'docker compose up'.\n" +
-		"2. Eseguire 'docker compose stop inference'.\n" +
-		"3. Eseguire il test 'TestSystem_AnomalyPath_FallbackAlarmIsStored' (vedi sotto).\n" +
-		"4. Eseguire 'docker compose start inference' per ripristinare.")
-
-	// Poiché non possiamo automatizzare lo stop/start facilmente da qui,
-	// creiamo un test separato da eseguire MENTRE inference è offline.
-}
-
-// TestSystem_AnomalyPath_FallbackAlarmIsStored è un test da eseguire
-// manualmente dopo aver fermato il container 'inference'.
-func TestSystem_AnomalyPath_FallbackAlarmIsStored(t *testing.T) {
-	t.Log("Esecuzione del test di fallback. Assicurarsi che 'inference-service' sia OFFLINE.")
-
-	// Fase 1: Setup
-	conn, err := grpc.Dial(collectorAddress, grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithBlock())
-	require.NoError(t, err, "Collector Service deve essere in esecuzione")
-	defer conn.Close()
-	collectorClient := pb.NewMetricsCollectorClient(conn)
-
-	influxClient := influxdb2.NewClient(influxURL, influxToken)
-	defer influxClient.Close()
-	queryAPI := influxClient.QueryAPI(influxOrg)
-	const influxAlarmsBucket = "alarms"
-
-	// Fase 2: Azione - Invia una metrica che attiverà il fallback
-	uniqueClientID := fmt.Sprintf("integration-test-fallback-%d", time.Now().UnixNano())
-	// Usiamo valori alti per src_bytes per essere sicuri di superare la soglia di fallback (> 95.0)
-	fallbackFeatures := make([]float32, 41)
-	fallbackFeatures[4] = 150.0
-
-	testMetric := &pb.Metric{
-		SourceClientId: uniqueClientID,
-		Type:           "network_traffic",
-		Timestamp:      time.Now().Unix(),
-		Features:       fallbackFeatures,
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	resp, err := collectorClient.SendMetric(ctx, testMetric)
-	require.NoError(t, err, "La chiamata SendMetric non doveva fallire anche con inference offline")
-	assert.Contains(t, resp.Message, "Threshold (Fallback)", "La risposta doveva indicare che il fallback è stato usato")
+	// --- CORREZIONE QUI ---
+	// Il messaggio di successo ora è "Correlated anomaly detected by ML Model and stored"
+	assert.Contains(t, resp.Message, "Correlated anomaly detected by ML Model", "La risposta doveva indicare un allarme correlato")
 
 	time.Sleep(2 * time.Second)
 
-	// Fase 3: Verifica - Controlliamo che l'allarme di fallback sia nel bucket corretto
-	query := fmt.Sprintf(`
-		from(bucket: "%s")
-		|> range(start: -1m)
-		|> filter(fn: (r) => r._measurement == "alarm")
-		|> filter(fn: (r) => r.client_id == "%s")
-		|> filter(fn: (r) => r.rule_id == "anomaly_by_threshold_(fallback)")
-		|> count()
-	`, influxAlarmsBucket, uniqueClientID)
-
-	result, err := queryAPI.Query(context.Background(), query)
-	require.NoError(t, err, "La query sul bucket 'alarms' non doveva fallire")
-
-	found := false
-	for result.Next() {
-		if result.Record().Value().(int64) > 0 {
-			found = true
-		}
+	result, err = queryAPI.Query(context.Background(), query)
+	require.NoError(t, err)
+	found = false
+	if result.Next() && result.Record().Value() != nil && result.Record().Value().(int64) > 0 {
+		found = true
 	}
+	assert.True(t, found, "Un allarme doveva essere presente dopo aver superato la soglia")
+}
 
-	assert.True(t, found, "Un allarme di fallback per il client_id %s doveva essere presente, ma non è stato trovato", uniqueClientID)
+func TestSystem_FaultTolerance_FallbackIsTriggeredAndRecovers(t *testing.T) {
+	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	require.NoError(t, err, "Impossibile creare il client Docker")
+	inferenceContainerName := "ids-project-inference-1"
+
+	t.Run("Fallback Logic Activation", func(t *testing.T) {
+		t.Logf("--- Arresto del container '%s' per simulare un guasto...", inferenceContainerName)
+		err := cli.ContainerStop(context.Background(), inferenceContainerName, container.StopOptions{})
+		require.NoError(t, err, "Impossibile fermare il container di inferenza")
+		time.Sleep(5 * time.Second)
+		collectorClient, cleanup := connectToCollector(t)
+		defer cleanup()
+		uniqueClientID := fmt.Sprintf("integration-test-fallback-%d", time.Now().UnixNano())
+		fallbackFeatures := make([]float32, 41)
+		fallbackFeatures[4] = 150.0
+		testMetric := &pb.Metric{
+			SourceClientId: uniqueClientID,
+			Type:           "network_traffic",
+			Timestamp:      time.Now().Unix(),
+			Features:       fallbackFeatures,
+			Value:          150.0,
+		}
+		t.Logf("Invio di %d richieste anomale durante il guasto...", alarmThreshold)
+		for i := 0; i < alarmThreshold; i++ {
+			resp, err := collectorClient.SendMetric(context.Background(), testMetric)
+			require.NoError(t, err)
+			if i < alarmThreshold-1 {
+				assert.Contains(t, resp.Message, "Suspicious metric recorded", "La risposta doveva essere 'sospetta'")
+			} else {
+				// --- CORREZIONE QUI ---
+				assert.Contains(t, resp.Message, "Correlated anomaly detected by Threshold (Fallback)", "L'ultima risposta doveva essere un allarme correlato di fallback")
+			}
+		}
+	})
+
+	t.Run("System Auto-Recovery", func(t *testing.T) {
+		t.Logf("--- Riavvio del container '%s' per simulare il recupero...", inferenceContainerName)
+		err := cli.ContainerStart(context.Background(), inferenceContainerName, container.StartOptions{})
+		require.NoError(t, err, "Impossibile riavviare il container di inferenza")
+		t.Logf("In attesa del recupero del Circuit Breaker (circa 35s)...")
+		time.Sleep(35 * time.Second)
+		collectorClient, cleanup := connectToCollector(t)
+		defer cleanup()
+		anomalousFeatures := []float32{0, 1, 19, 5, 0, 0, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 240, 19, 1, 1, 0.08, 0.08, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
+		testMetric := &pb.Metric{
+			SourceClientId: "test-client-recovery",
+			Type:           "network_traffic",
+			Features:       anomalousFeatures,
+		}
+		var finalResp *pb.CollectorResponse
+		for i := 0; i < alarmThreshold; i++ {
+			finalResp, err = collectorClient.SendMetric(context.Background(), testMetric)
+			require.NoError(t, err)
+		}
+		// --- CORREZIONE QUI ---
+		assert.Contains(t, finalResp.Message, "Correlated anomaly detected by ML Model", "Il sistema doveva riprendersi e usare di nuovo il modello ML")
+		t.Log("Recupero automatico verificato con successo!")
+	})
 }
