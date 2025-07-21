@@ -45,10 +45,14 @@ logs:
 	@echo "-> Visualizzazione dei log in tempo reale (premere Ctrl+C per uscire)..."
 	docker compose logs -f
 
-# Esegue lo script del client di test.
-test-client:
-	@echo "-> Esecuzione del client di test per generare traffico..."
-	go run ./cmd/test-client/main.go
+# Esegue i client di test
+test-client-normal:
+	@echo "-> Esecuzione del client in modalità BENIGNA (solo traffico normale)..."
+	go run ./cmd/test-client/main.go -mode=benign
+
+test-client-malicious:
+	@echo "-> Esecuzione del client in modalità MALEVOLA (solo traffico di attacco)..."
+	go run ./cmd/test-client/main.go -mode=malicious
 
 # Pulisce completamente l'ambiente, inclusi i dati persistenti.
 # Utile per un reset completo.

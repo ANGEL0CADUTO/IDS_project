@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/csv"
+	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -33,23 +34,17 @@ var (
 func buildCategoricalMaps(filePath string) {
 	file, err := os.Open(filePath)
 	if err != nil {
-		log.Fatalf("Impossibile aprire il file di training %s per costruire le mappe: %v", filePath, err)
+		log.Fatalf("Impossibile aprire il file: %v", filePath)
 	}
 	defer file.Close()
-
 	reader := csv.NewReader(file)
-	// Salta l'header ARFF se presente
 	reader.Comment = '@'
-
 	for {
 		record, err := reader.Read()
 		if err == io.EOF {
 			break
 		}
-		if err != nil {
-			continue
-		}
-		if len(record) < 4 {
+		if err != nil || len(record) < 4 {
 			continue
 		}
 		if _, exists := protocolMap[record[1]]; !exists {
@@ -62,39 +57,26 @@ func buildCategoricalMaps(filePath string) {
 			flagMap[record[3]] = float32(len(flagMap))
 		}
 	}
-	log.Println("Mappe per le feature categoriche costruite con successo dal dataset di training.")
 }
 
 func recordToFeatures(record []string) ([]float32, error) {
-	// I dati utili sono sempre le prime 41 colonne
 	if len(record) < 41 {
 		return nil, fmt.Errorf("record con meno di 41 feature: %d", len(record))
 	}
-
 	features := make([]float32, 41)
-
 	for i := 0; i < 41; i++ {
 		var val float64
 		var err error
-
 		switch i {
 		case 1:
-			if v, ok := protocolMap[record[i]]; ok {
-				features[i] = v
-			}
+			features[i] = protocolMap[record[i]]
 		case 2:
-			if v, ok := serviceMap[record[i]]; ok {
-				features[i] = v
-			}
+			features[i] = serviceMap[record[i]]
 		case 3:
-			if v, ok := flagMap[record[i]]; ok {
-				features[i] = v
-			}
+			features[i] = flagMap[record[i]]
 		default:
 			val, err = strconv.ParseFloat(strings.TrimSpace(record[i]), 32)
-			if err != nil {
-				features[i] = 0
-			} else {
+			if err == nil {
 				features[i] = float32(val)
 			}
 		}
@@ -103,6 +85,9 @@ func recordToFeatures(record []string) ([]float32, error) {
 }
 
 func main() {
+	mode := flag.String("mode", "benign", "Modalità di esecuzione: 'benign' o 'malicious'")
+	flag.Parse()
+
 	const numClients = 5
 	buildCategoricalMaps(trainFilePath)
 	var wg sync.WaitGroup
@@ -112,9 +97,17 @@ func main() {
 		go func(clientID int) {
 			defer wg.Done()
 
-			log.Printf("[Client %d] Avvio...", clientID)
+			var isMaliciousClient bool
+			if *mode == "malicious" {
+				isMaliciousClient = true
+				log.Printf("[Client %d] Avvio in modalità MALEVOLA.", clientID)
+			} else {
+				isMaliciousClient = false
+				log.Printf("[Client %d] Avvio in modalità BENIGNA.", clientID)
+			}
 
-			// ... (connessione gRPC rimane uguale)
+			time.Sleep(time.Duration(rand.Intn(500)) * time.Millisecond)
+
 			conn, err := grpc.Dial(address, grpc.WithTransportCredentials(insecure.NewCredentials()))
 			if err != nil {
 				log.Printf("[Client %d] Errore di connessione: %v", clientID, err)
@@ -125,22 +118,20 @@ func main() {
 
 			file, err := os.Open(testFilePath)
 			if err != nil {
-				log.Printf("[Client %d] Impossibile aprire il file di test %s: %v", clientID, testFilePath, err)
+				log.Printf("[Client %d] Impossibile aprire file: %v", clientID, err)
 				return
 			}
 			defer file.Close()
 			reader := csv.NewReader(file)
 			reader.Comment = '@'
 
-			// --- INIZIO LOGICA MODIFICATA ---
-
-			// Definiamo quali client sono "rumorosi"
-			isNoisyClient := (clientID == 1 || clientID == 3) // Ad esempio, il client 1 e 3
-
-			for j := 0; j < 10000; j++ {
+			recordsSent := 0
+			for { // Loop infinito finché non si inviano abbastanza record
 				record, err := reader.Read()
-				if err == io.EOF {
-					break
+				if err == io.EOF { // Se il file finisce, ricomincia
+					file.Seek(0, 0)
+					reader = csv.NewReader(file)
+					continue
 				}
 				if err != nil {
 					continue
@@ -151,18 +142,13 @@ func main() {
 					label = record[41]
 				}
 
-				// Logica di invio differenziata
-				// I client rumorosi inviano sempre i dati etichettati come attacchi.
-				// Gli altri client inviano preferenzialmente i dati etichettati come normali.
-				if isNoisyClient {
-					// Se questo client è rumoroso, cerca un record di attacco da inviare
+				if isMaliciousClient {
 					if label == "normal" {
-						continue // Salta questo record e passa al prossimo
+						continue
 					}
 				} else {
-					// Se questo client è "benigno", cerca un record normale da inviare
 					if label != "normal" {
-						continue // Salta questo record e passa al prossimo
+						continue
 					}
 				}
 
@@ -171,11 +157,9 @@ func main() {
 					continue
 				}
 
-				sourceID := fmt.Sprintf("concurrent-client-%d", clientID)
 				metric := &pb.Metric{
-					SourceClientId: sourceID,
+					SourceClientId: fmt.Sprintf("concurrent-client-%d", clientID),
 					Type:           "network_traffic",
-					Value:          float64(features[4]),
 					Timestamp:      time.Now().Unix(),
 					Features:       features,
 				}
@@ -189,13 +173,16 @@ func main() {
 				}
 				cancel()
 
-				time.Sleep(time.Duration(500+rand.Intn(500)) * time.Millisecond)
+				recordsSent++
+				if recordsSent >= 200 { // Limita ogni client a 200 richieste per non ciclare all'infinito
+					break
+				}
+
+				time.Sleep(time.Duration(400+rand.Intn(600)) * time.Millisecond)
 			}
 			log.Printf("[Client %d] Invio completato.", clientID)
-			// --- FINE LOGICA MODIFICATA ---
 		}(i)
 	}
-
 	wg.Wait()
 	log.Println("Tutti i client hanno terminato.")
 }

@@ -67,7 +67,7 @@ services:
       context: .
       dockerfile: services/analysis/Dockerfile
     deploy:
-      replicas: 5
+      replicas: 2
       restart_policy:
         condition: on-failure
     environment:
