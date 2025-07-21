@@ -19,8 +19,8 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
+// I percorsi dei file rimangono costanti perché sono legati al codice
 const (
-	address       = "localhost:50051"
 	trainFilePath = "KDDTrain+.txt"
 	testFilePath  = "KDDTest+.txt"
 )
@@ -31,6 +31,7 @@ var (
 	flagMap     = make(map[string]float32)
 )
 
+// Le funzioni buildCategoricalMaps e recordToFeatures rimangono invariate...
 func buildCategoricalMaps(filePath string) {
 	file, err := os.Open(filePath)
 	if err != nil {
@@ -85,30 +86,31 @@ func recordToFeatures(record []string) ([]float32, error) {
 }
 
 func main() {
+	// --- GESTIONE DEI PARAMETRI TRAMITE FLAG ---
+	collectorAddr := flag.String("addr", "localhost:50051", "Indirizzo del collector-service (es. 'localhost:50051' o 'IP_EC2:50051')")
 	mode := flag.String("mode", "benign", "Modalità di esecuzione: 'benign' o 'malicious'")
+	numClients := flag.Int("clients", 5, "Numero di client concorrenti da avviare")
+	recordsPerClient := flag.Int("records", 200, "Numero di record che ogni client invierà (0 per infinito)")
+	delayMs := flag.Int("delay", 500, "Pausa media in millisecondi tra un invio e l'altro")
 	flag.Parse()
 
-	const numClients = 5
+	log.Printf("--- Avvio Data Generator ---")
+	log.Printf("Target: %s | Modalità: %s | Client: %d | Record per client: %d", *collectorAddr, *mode, *numClients, *recordsPerClient)
+
 	buildCategoricalMaps(trainFilePath)
 	var wg sync.WaitGroup
 
-	for i := 1; i <= numClients; i++ {
+	for i := 1; i <= *numClients; i++ {
 		wg.Add(1)
 		go func(clientID int) {
 			defer wg.Done()
 
-			var isMaliciousClient bool
-			if *mode == "malicious" {
-				isMaliciousClient = true
-				log.Printf("[Client %d] Avvio in modalità MALEVOLA.", clientID)
-			} else {
-				isMaliciousClient = false
-				log.Printf("[Client %d] Avvio in modalità BENIGNA.", clientID)
-			}
+			isMaliciousClient := (*mode == "malicious")
+			log.Printf("[Client %d] Avvio in modalità %s.", clientID, strings.ToUpper(*mode))
 
 			time.Sleep(time.Duration(rand.Intn(500)) * time.Millisecond)
 
-			conn, err := grpc.Dial(address, grpc.WithTransportCredentials(insecure.NewCredentials()))
+			conn, err := grpc.Dial(*collectorAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 			if err != nil {
 				log.Printf("[Client %d] Errore di connessione: %v", clientID, err)
 				return
@@ -126,9 +128,9 @@ func main() {
 			reader.Comment = '@'
 
 			recordsSent := 0
-			for { // Loop infinito finché non si inviano abbastanza record
+			for {
 				record, err := reader.Read()
-				if err == io.EOF { // Se il file finisce, ricomincia
+				if err == io.EOF {
 					file.Seek(0, 0)
 					reader = csv.NewReader(file)
 					continue
@@ -142,14 +144,8 @@ func main() {
 					label = record[41]
 				}
 
-				if isMaliciousClient {
-					if label == "normal" {
-						continue
-					}
-				} else {
-					if label != "normal" {
-						continue
-					}
+				if (isMaliciousClient && label == "normal") || (!isMaliciousClient && label != "normal") {
+					continue
 				}
 
 				features, err := recordToFeatures(record)
@@ -174,11 +170,12 @@ func main() {
 				cancel()
 
 				recordsSent++
-				if recordsSent >= 200 { // Limita ogni client a 200 richieste per non ciclare all'infinito
+				if *recordsPerClient > 0 && recordsSent >= *recordsPerClient {
 					break
 				}
 
-				time.Sleep(time.Duration(400+rand.Intn(600)) * time.Millisecond)
+				// Pausa variabile intorno al valore specificato
+				time.Sleep(time.Duration(*delayMs/2+rand.Intn(*delayMs)) * time.Millisecond)
 			}
 			log.Printf("[Client %d] Invio completato.", clientID)
 		}(i)

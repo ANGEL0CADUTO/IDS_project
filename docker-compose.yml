@@ -27,17 +27,15 @@ services:
       - CONSUL_HOST=consul
       - CONSUL_PORT=8500
       - GRPC_PORT=5000
-      # --- CORREZIONE 1: Aggiunta variabile per Jaeger ---
+
       - JAEGER_ADDR=jaeger:4317
     depends_on:
       consul:
         condition: service_healthy
-      # Aggiungiamo dipendenza da Jaeger per un avvio più ordinato
       jaeger:
         condition: service_started
     healthcheck:
       test: [ "CMD", "/grpc_health_probe", "-addr=:5000" ]
-      # --- CORREZIONE 2: Healthcheck più reattivo ---
       interval: 5s
       timeout: 1s
       retries: 3
@@ -76,8 +74,9 @@ services:
       - GRPC_PORT=50053
       - JAEGER_ADDR=jaeger:4317
       - INFERENCE_SERVICE_NAME=inference-service
-      - ALARM_THRESHOLD=4       # Genera un allarme dopo 5 anomalie...
-      - ALARM_WINDOW_SECONDS=60 # ...ricevute in una finestra di 60 secondi.
+      - ALARM_THRESHOLD=4       # Genera un allarme dopo 5 anomalie
+      - ALARM_WINDOW_SECONDS=60 # ricevute in una finestra di 60 secondi.
+      - FALLBACK_THRESHOLD=95.0
     depends_on:
       storage:
         condition: service_healthy

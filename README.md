@@ -17,8 +17,10 @@ L'infrastruttura di supporto include:
 - **Jaeger:** Per il Distributed Tracing e l'analisi delle performance.
 - **Grafana:** Per la visualizzazione dei dati e il monitoraggio in tempo reale.
 
-![Diagramma Architettura](path/to/your/architecture_diagram.png)
-*(diagramma della architettura)*
+![Diagramma Architettura](images/ArchitetturaSistema.PNG)
+![Diagramma Grafana](images/Grafana.PNG)
+![Diagramma Consul](images/Consul.PNG)
+![Diagramma Tracing](images/Tracing.PNG)
 
 ## Pattern Implementati
 

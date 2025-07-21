@@ -24,8 +24,9 @@ import (
 
 // --- PARAMETRI CONFIGURABILI PER LA CORRELAZIONE ---
 var (
-	anomalyThreshold int
-	timeWindow       time.Duration
+	anomalyThreshold  int
+	timeWindow        time.Duration
+	fallbackThreshold float64 // NUOVA VARIABILE
 )
 
 type server struct {
@@ -60,7 +61,7 @@ func (s *server) AnalyzeMetric(ctx context.Context, in *pb.Metric) (*pb.Analysis
 		if len(in.Features) > 4 {
 			triggerValue = float64(in.Features[4])
 		}
-		if triggerValue > 95.0 {
+		if triggerValue > fallbackThreshold {
 			isAnomaly = true
 		}
 	} else {
@@ -146,6 +147,7 @@ func main() {
 	// --- PARAMETRI RESI CONFIGURABILI ---
 	thresholdStr := getEnv("ALARM_THRESHOLD", "3")
 	windowStr := getEnv("ALARM_WINDOW_SECONDS", "60")
+	fallbackThresholdStr := getEnv("FALLBACK_THRESHOLD", "95.0")
 	var err error
 	anomalyThreshold, err = strconv.Atoi(thresholdStr)
 	if err != nil {
@@ -156,7 +158,10 @@ func main() {
 		log.Fatalf("Invalid ALARM_WINDOW_SECONDS: %v", err)
 	}
 	timeWindow = time.Duration(windowSec) * time.Second
-	// --- FINE CONFIGURAZIONE ---
+	fallbackThreshold, err = strconv.ParseFloat(fallbackThresholdStr, 64)
+	if err != nil {
+		log.Fatalf("Invalid FALLBACK_THRESHOLD: %v", err)
+	}
 
 	consulAddr := getEnv("CONSUL_ADDR", "localhost:8500")
 	jaegerAddr := getEnv("JAEGER_ADDR", "localhost:4317")
