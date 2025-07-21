@@ -1,6 +1,5 @@
 syntax = "proto3";
 
-// Stesso package Go dei file proto esistenti
 option go_package = "github.com/ANGEL0CADUTO/IDS_project/proto";
 
 package proto;

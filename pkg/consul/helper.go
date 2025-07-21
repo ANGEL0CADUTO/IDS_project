@@ -43,8 +43,6 @@ func RegisterService(consulAddr, serviceName, serviceID string, servicePort int)
 	return client
 }
 
-// --- INIZIO BLOCCO CORRETTO ---
-
 // DiscoverService interroga Consul per trovare l'indirizzo di un altro servizio.
 // Utile per i servizi che necessitano di connettersi a un singleton.
 func DiscoverService(client *consulapi.Client, serviceName string) (string, error) {
@@ -113,8 +111,6 @@ func DiscoverAllServices(client *consulapi.Client, serviceName string) ([]string
 
 	return nil, lastErr
 }
-
-// --- FINE BLOCCO CORRETTO ---
 
 // DeregisterService si deregistra da Consul
 func DeregisterService(client *consulapi.Client, serviceID string) {

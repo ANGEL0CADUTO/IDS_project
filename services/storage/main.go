@@ -34,6 +34,7 @@ type server struct {
 	influxWriteAPIAlarms api.WriteAPI
 }
 
+// --- StoreMetric salva metrica ---
 func (s *server) StoreMetric(ctx context.Context, in *pb.Metric) (*pb.StorageResponse, error) {
 	// Creiamo UN SOLO punto per la metrica, identificato dal suo timestamp e client_id
 	p := influxdb2.NewPointWithMeasurement(in.Type).
@@ -67,7 +68,7 @@ func (s *server) StoreMetric(ctx context.Context, in *pb.Metric) (*pb.StorageRes
 	return &pb.StorageResponse{Success: true, Message: "Metric stored"}, nil
 }
 
-// --- FUNZIONE StoreAlarm CORRETTA ---
+// --- StoreAlarm salva allarme ---
 func (s *server) StoreAlarm(ctx context.Context, in *pb.Alarm) (*pb.StorageResponse, error) {
 	// Creiamo UN SOLO punto per l'allarme
 	p := influxdb2.NewPointWithMeasurement("alarm").

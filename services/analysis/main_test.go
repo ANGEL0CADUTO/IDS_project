@@ -1,11 +1,9 @@
-// in services/analysis/main_test.go
-
 package main
 
 import (
 	"context"
 	"errors"
-	"sync" // Aggiunto sync per il mutex
+	"sync"
 	"testing"
 	"time"
 
@@ -14,7 +12,6 @@ import (
 	"google.golang.org/grpc"
 )
 
-// --- Mock dei client gRPC (invariati ma completi) ---
 type mockStorageClient struct {
 	pb.StorageClient
 	storeMetricCalledCount int
@@ -44,8 +41,6 @@ func (m *mockInferenceClient) Predict(ctx context.Context, in *pb.InferenceReque
 	}
 	return &pb.InferenceResponse{Prediction: m.prediction}, nil
 }
-
-// --- Test Aggiornati ---
 
 // Test per una metrica normale che deve essere salvata correttamente.
 func TestAnalyzeMetric_NormalMetric(t *testing.T) {

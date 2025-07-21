@@ -1,4 +1,3 @@
-// Specifica la sintassi del file. proto3 è la versione corrente.
 syntax = "proto3";
 
 // Definisce il package Go dove verrà generato il codice.

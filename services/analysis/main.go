@@ -22,6 +22,12 @@ import (
 	"google.golang.org/grpc/health/grpc_health_v1"
 )
 
+// --- PARAMETRI CONFIGURABILI PER LA CORRELAZIONE ---
+var (
+	anomalyThreshold int
+	timeWindow       time.Duration
+)
+
 type server struct {
 	pb.UnimplementedAnalysisServiceServer
 	storageClient     pb.StorageClient
@@ -60,7 +66,7 @@ func (s *server) AnalyzeMetric(ctx context.Context, in *pb.Metric) (*pb.Analysis
 	} else {
 		analysisSource = "ML Model"
 		infResp := response.(*pb.InferenceResponse)
-		if infResp.Prediction == -1 {
+		if infResp.Prediction == -1 { // Usiamo il modello IsolationForest
 			isAnomaly = true
 		}
 	}
@@ -79,11 +85,8 @@ func (s *server) AnalyzeMetric(ctx context.Context, in *pb.Metric) (*pb.Analysis
 		return &pb.AnalysisResponse{Processed: true, Message: "Metric analyzed as normal and stored"}, nil
 	}
 
+	// Se arriviamo qui, la metrica è stata classificata come anomala
 	log.Printf("Potential anomaly detected for client %s from %s. Checking recent history...", in.SourceClientId, analysisSource)
-	const (
-		anomalyThreshold = 3
-		timeWindow       = 1 * time.Minute
-	)
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -101,12 +104,12 @@ func (s *server) AnalyzeMetric(ctx context.Context, in *pb.Metric) (*pb.Analysis
 
 	if len(validTimestamps) >= anomalyThreshold {
 		log.Printf("--- ALARM TRIGGERED for client %s! (%d anomalies in last %v from %s) ---", in.SourceClientId, len(validTimestamps), timeWindow, analysisSource)
-		s.suspiciousClients[in.SourceClientId] = []time.Time{}
+		s.suspiciousClients[in.SourceClientId] = []time.Time{} // Resetta la storia
 
 		alarm := &pb.Alarm{
-			RuleId:        fmt.Sprintf("anomaly_by_%s", strings.ToLower(strings.ReplaceAll(analysisSource, " ", "_"))),
+			RuleId:        fmt.Sprintf("correlated_anomaly_by_%s", strings.ToLower(strings.ReplaceAll(analysisSource, " ", "_"))),
 			ClientId:      in.SourceClientId,
-			Description:   fmt.Sprintf("Corroborated anomaly detected for client %s by %s", in.SourceClientId, analysisSource),
+			Description:   fmt.Sprintf("Correlated anomaly detected for client %s by %s", in.SourceClientId, analysisSource),
 			Timestamp:     time.Now().Unix(),
 			TriggerMetric: in,
 		}
@@ -119,15 +122,17 @@ func (s *server) AnalyzeMetric(ctx context.Context, in *pb.Metric) (*pb.Analysis
 			log.Printf("ERROR: could not store alarm: %v", err)
 			return &pb.AnalysisResponse{Processed: false, Message: "Failed to store alarm"}, err
 		}
-		return &pb.AnalysisResponse{Processed: true, Message: fmt.Sprintf("Anomaly detected by %s and stored", analysisSource)}, nil
+		return &pb.AnalysisResponse{Processed: true, Message: fmt.Sprintf("Correlated anomaly detected by %s and stored", analysisSource)}, nil
 	}
 
-	log.Printf("Suspicious metric from %s logged. Count: %d/%d. Not enough to trigger alarm.", in.SourceClientId, len(validTimestamps), anomalyThreshold)
+	// Se non abbiamo raggiunto la soglia, l'anomalia è "sospetta".
+	// La salviamo come una metrica normale.
+	log.Printf("Suspicious metric from %s logged as normal. Count: %d/%d. Not enough to trigger alarm.", in.SourceClientId, len(validTimestamps), anomalyThreshold)
 	storeCtx := ctx
 	if analysisSource == "Threshold (Fallback)" {
 		storeCtx = context.Background()
 	}
-	_, err = s.storageClient.StoreMetric(storeCtx, in)
+	_, err = s.storageClient.StoreMetric(storeCtx, in) // <-- Salva come metrica normale
 	if err != nil {
 		log.Printf("ERROR: could not store suspicious metric: %v", err)
 		return &pb.AnalysisResponse{Processed: false, Message: "Failed to store metric"}, err
@@ -137,6 +142,22 @@ func (s *server) AnalyzeMetric(ctx context.Context, in *pb.Metric) (*pb.Analysis
 
 func main() {
 	log.Println("--- Avvio Analysis Service ---")
+
+	// --- PARAMETRI RESI CONFIGURABILI ---
+	thresholdStr := getEnv("ALARM_THRESHOLD", "3")
+	windowStr := getEnv("ALARM_WINDOW_SECONDS", "60")
+	var err error
+	anomalyThreshold, err = strconv.Atoi(thresholdStr)
+	if err != nil {
+		log.Fatalf("Invalid ALARM_THRESHOLD: %v", err)
+	}
+	windowSec, err := strconv.Atoi(windowStr)
+	if err != nil {
+		log.Fatalf("Invalid ALARM_WINDOW_SECONDS: %v", err)
+	}
+	timeWindow = time.Duration(windowSec) * time.Second
+	// --- FINE CONFIGURAZIONE ---
+
 	consulAddr := getEnv("CONSUL_ADDR", "localhost:8500")
 	jaegerAddr := getEnv("JAEGER_ADDR", "localhost:4317")
 	portStr := getEnv("GRPC_PORT", "50053")
@@ -203,14 +224,12 @@ func main() {
 		),
 	)
 
-	// --- CORREZIONE DEFINITIVA E CENTRALE ---
-	// Creiamo UNA SOLA istanza del nostro server, inizializzando TUTTI i suoi campi.
 	serverInstance := &server{
 		storageClient:     storageClient,
 		inferenceClient:   inferenceClient,
 		circuitBreaker:    cb,
-		suspiciousClients: make(map[string][]time.Time), // Inizializza la mappa
-		mu:                sync.Mutex{},                 // Inizializza il mutex
+		suspiciousClients: make(map[string][]time.Time),
+		mu:                sync.Mutex{},
 	}
 	pb.RegisterAnalysisServiceServer(s, serverInstance)
 

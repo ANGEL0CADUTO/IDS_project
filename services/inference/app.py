@@ -8,7 +8,6 @@ import joblib
 import numpy as np
 from consul import Consul
 
-# --- CORREZIONE 1: Aggiunta import di OpenTelemetry ---
 from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor

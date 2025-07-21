@@ -76,6 +76,8 @@ services:
       - GRPC_PORT=50053
       - JAEGER_ADDR=jaeger:4317
       - INFERENCE_SERVICE_NAME=inference-service
+      - ALARM_THRESHOLD=4       # Genera un allarme dopo 5 anomalie...
+      - ALARM_WINDOW_SECONDS=60 # ...ricevute in una finestra di 60 secondi.
     depends_on:
       storage:
         condition: service_healthy

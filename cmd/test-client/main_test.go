@@ -1,8 +1,8 @@
 package main
 
 import (
-	"reflect" // Pacchetto per confrontare array/slice
-	"testing" // Il pacchetto standard per i test di Go
+	"reflect"
+	"testing"
 )
 
 // TestRecordToFeatures è la nostra funzione di test.
