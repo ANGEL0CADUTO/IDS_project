@@ -2,11 +2,13 @@ package main
 
 import (
 	"context"
+
 	"fmt"
+	"hash/fnv"
 	"log"
 	"net"
 	"os"
-	"strconv" // Import necessario per convertire la porta
+	"strconv"
 	"sync"
 	"time"
 
@@ -25,17 +27,27 @@ type server struct {
 	pb.UnimplementedMetricsCollectorServer
 	consulClient        *consulapi.Client
 	analysisServiceName string
-	analysisConns       map[string]*grpc.ClientConn
-	analysisConnsMu     sync.RWMutex
+	// Manteniamo un pool di connessioni per riutilizzarle
+	analysisConns   map[string]*grpc.ClientConn
+	analysisConnsMu sync.RWMutex
 }
 
-func (s *server) getAnalysisClient(ctx context.Context) (pb.AnalysisServiceClient, error) {
+// getAnalysisClientForMetric implementa il Consistent Hashing
+func (s *server) getAnalysisClientForMetric(ctx context.Context, clientID string) (pb.AnalysisServiceClient, error) {
+	// 1. Scopri tutte le istanze sane disponibili
 	analysisAddrs, err := consul.DiscoverAllServices(s.consulClient, s.analysisServiceName)
 	if err != nil || len(analysisAddrs) == 0 {
 		return nil, fmt.Errorf("could not discover any healthy analysis service: %v", err)
 	}
-	targetAddr := analysisAddrs[time.Now().Unix()%int64(len(analysisAddrs))]
 
+	// 2. Calcola l'hash del client ID per scegliere un'istanza in modo deterministico
+	h := fnv.New32a()
+	h.Write([]byte(clientID))
+	hash := h.Sum32()
+	index := int(hash % uint32(len(analysisAddrs)))
+	targetAddr := analysisAddrs[index]
+
+	// 3. Controlla se abbiamo già una connessione a quell'istanza nel nostro pool
 	s.analysisConnsMu.RLock()
 	conn, ok := s.analysisConns[targetAddr]
 	s.analysisConnsMu.RUnlock()
@@ -44,15 +56,17 @@ func (s *server) getAnalysisClient(ctx context.Context) (pb.AnalysisServiceClien
 		return pb.NewAnalysisServiceClient(conn), nil
 	}
 
+	// 4. Se non c'è una connessione, ne creiamo una nuova e la aggiungiamo al pool
 	s.analysisConnsMu.Lock()
 	defer s.analysisConnsMu.Unlock()
 
+	// Ricontrolliamo nel caso un'altra goroutine l'abbia creata mentre aspettavamo il lock
 	if conn, ok = s.analysisConns[targetAddr]; ok {
 		return pb.NewAnalysisServiceClient(conn), nil
 	}
 
-	log.Printf("Creating new gRPC connection to analysis service at %s", targetAddr)
-	conn, err = grpc.Dial(targetAddr,
+	log.Printf("Creating new gRPC connection to analysis service at %s (for client %s)", targetAddr, clientID)
+	conn, err = grpc.DialContext(ctx, targetAddr,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithBlock(),
 		grpc.WithUnaryInterceptor(otelgrpc.UnaryClientInterceptor()),
@@ -68,7 +82,8 @@ func (s *server) getAnalysisClient(ctx context.Context) (pb.AnalysisServiceClien
 func (s *server) SendMetric(ctx context.Context, in *pb.Metric) (*pb.CollectorResponse, error) {
 	log.Printf("Received metric from %s.", in.SourceClientId)
 
-	analysisClient, err := s.getAnalysisClient(ctx)
+	// Usa il nuovo metodo di selezione basato sul client ID
+	analysisClient, err := s.getAnalysisClientForMetric(ctx, in.SourceClientId)
 	if err != nil {
 		log.Printf("ERROR: Failed to get analysis client: %v", err)
 		return &pb.CollectorResponse{Accepted: false, Message: "Upstream analysis service unavailable"}, err
@@ -83,7 +98,7 @@ func (s *server) SendMetric(ctx context.Context, in *pb.Metric) (*pb.CollectorRe
 		return &pb.CollectorResponse{Accepted: false, Message: "Failed to forward metric"}, err
 	}
 
-	log.Printf("Metric forwarded successfully. Response: %s", analysisResp.Message)
+	log.Printf("Metric forwarded successfully to instance. Response: %s", analysisResp.Message)
 
 	return &pb.CollectorResponse{
 		Accepted: analysisResp.Processed,
@@ -96,7 +111,6 @@ func main() {
 	jaegerAddr := getEnv("JAEGER_ADDR", "localhost:4317")
 	serviceName := "collector-service"
 	portStr := getEnv("GRPC_PORT", "50051")
-	// --- MODIFICA 1: Converti la porta in un intero per la registrazione a Consul ---
 	port, err := strconv.Atoi(portStr)
 	if err != nil {
 		log.Fatalf("Porta non valida: %v", err)
@@ -112,16 +126,12 @@ func main() {
 		}
 	}()
 
-	// --- MODIFICA 2: Registra il servizio a Consul all'avvio ---
 	log.Println("Registrazione a Consul...")
 	serviceID := fmt.Sprintf("%s-%s", serviceName, os.Getenv("HOSTNAME"))
-	// NOTA: Usiamo il client restituito da RegisterService solo per la de-registrazione.
-	// Il client per la service discovery viene creato separatamente sotto.
 	consulClientForRegistration := consul.RegisterService(consulAddr, serviceName, serviceID, port)
 	defer consul.DeregisterService(consulClientForRegistration, serviceID)
 	log.Println("Registrato a Consul con successo.")
 
-	// Creazione del client Consul per la Service Discovery (logica esistente)
 	config := consulapi.DefaultConfig()
 	config.Address = consulAddr
 	consulClientForDiscovery, err := consulapi.NewClient(config)
@@ -144,15 +154,12 @@ func main() {
 		),
 	)
 
-	// Inizializza il server con il pool di connessioni e il client per la discovery
 	pb.RegisterMetricsCollectorServer(s, &server{
 		consulClient:        consulClientForDiscovery,
 		analysisServiceName: analysisServiceName,
 		analysisConns:       make(map[string]*grpc.ClientConn),
 	})
 
-	// --- MODIFICA 3: Registra il servizio di health check ---
-	// Questo è fondamentale per permettere a Consul di verificare se il servizio è sano.
 	grpc_health_v1.RegisterHealthServer(s, health.NewServer())
 
 	log.Printf("Collector service listening at %v", lis.Addr())

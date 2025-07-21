@@ -144,11 +144,13 @@ func TestSystem_FaultTolerance_FallbackIsTriggeredAndRecovers(t *testing.T) {
 		err := cli.ContainerStop(context.Background(), inferenceContainerName, container.StopOptions{})
 		require.NoError(t, err, "Impossibile fermare il container di inferenza")
 		time.Sleep(5 * time.Second)
+
 		collectorClient, cleanup := connectToCollector(t)
 		defer cleanup()
+
 		uniqueClientID := fmt.Sprintf("integration-test-fallback-%d", time.Now().UnixNano())
 		fallbackFeatures := make([]float32, 41)
-		fallbackFeatures[4] = 150.0
+		fallbackFeatures[4] = 150.0 // Valore per superare la soglia di fallback
 		testMetric := &pb.Metric{
 			SourceClientId: uniqueClientID,
 			Type:           "network_traffic",
@@ -156,14 +158,18 @@ func TestSystem_FaultTolerance_FallbackIsTriggeredAndRecovers(t *testing.T) {
 			Features:       fallbackFeatures,
 			Value:          150.0,
 		}
+
 		t.Logf("Invio di %d richieste anomale durante il guasto...", alarmThreshold)
 		for i := 0; i < alarmThreshold; i++ {
+			t.Logf("[DEBUG_TEST] Inizio chiamata #%d", i+1)
 			resp, err := collectorClient.SendMetric(context.Background(), testMetric)
 			require.NoError(t, err)
+
+			t.Logf("[DEBUG_TEST] Chiamata #%d - Risposta ricevuta: '%s'", i+1, resp.Message)
+
 			if i < alarmThreshold-1 {
 				assert.Contains(t, resp.Message, "Suspicious metric recorded", "La risposta doveva essere 'sospetta'")
 			} else {
-				// --- CORREZIONE QUI ---
 				assert.Contains(t, resp.Message, "Correlated anomaly detected by Threshold (Fallback)", "L'ultima risposta doveva essere un allarme correlato di fallback")
 			}
 		}
@@ -175,8 +181,10 @@ func TestSystem_FaultTolerance_FallbackIsTriggeredAndRecovers(t *testing.T) {
 		require.NoError(t, err, "Impossibile riavviare il container di inferenza")
 		t.Logf("In attesa del recupero del Circuit Breaker (circa 35s)...")
 		time.Sleep(35 * time.Second)
+
 		collectorClient, cleanup := connectToCollector(t)
 		defer cleanup()
+
 		anomalousFeatures := []float32{0, 1, 19, 5, 0, 0, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 240, 19, 1, 1, 0.08, 0.08, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
 		testMetric := &pb.Metric{
 			SourceClientId: "test-client-recovery",
@@ -188,7 +196,6 @@ func TestSystem_FaultTolerance_FallbackIsTriggeredAndRecovers(t *testing.T) {
 			finalResp, err = collectorClient.SendMetric(context.Background(), testMetric)
 			require.NoError(t, err)
 		}
-		// --- CORREZIONE QUI ---
 		assert.Contains(t, finalResp.Message, "Correlated anomaly detected by ML Model", "Il sistema doveva riprendersi e usare di nuovo il modello ML")
 		t.Log("Recupero automatico verificato con successo!")
 	})

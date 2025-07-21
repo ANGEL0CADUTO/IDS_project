@@ -39,15 +39,16 @@ type server struct {
 }
 
 func (s *server) AnalyzeMetric(ctx context.Context, in *pb.Metric) (*pb.AnalysisResponse, error) {
-	log.Printf("Analyzing metric from %s: type=%s", in.SourceClientId, in.Type)
+	log.Printf("[DEBUG] === INIZIO ANALISI per client %s ===", in.SourceClientId)
 
 	if len(in.Features) != 41 {
-		log.Printf("WARN: Metric received without 41 features. Skipping analysis.")
+		log.Printf("[DEBUG] Metrica scartata: numero di feature non valido (%d)", len(in.Features))
 		return &pb.AnalysisResponse{Processed: true, Message: "Metric skipped (incomplete features)"}, nil
 	}
 
 	isAnomaly := false
 	analysisSource := ""
+	infResp := &pb.InferenceResponse{}
 
 	response, err := s.circuitBreaker.Execute(func() (interface{}, error) {
 		log.Println("[DEBUG] Chiamata al servizio di inferenza (dentro Circuit Breaker)...")
@@ -56,26 +57,36 @@ func (s *server) AnalyzeMetric(ctx context.Context, in *pb.Metric) (*pb.Analysis
 	})
 
 	if err != nil {
-
-		log.Printf("WARN: CircuitBreaker is OPEN or inference call failed: %v. Falling back to threshold logic.", err)
+		log.Printf("[DEBUG] Chiamata a inferenza FALLITA o circuito APERTO. Errore: %v", err)
 		analysisSource = "Threshold (Fallback)"
+
 		var triggerValue float64
-		if len(in.Features) > 4 {
+		// Usiamo 'in.Value' come prima fonte, se non c'è usiamo Features[4]
+		// Questo rende la logica più robusta
+		if in.Value != 0 {
+			triggerValue = in.Value
+		} else if len(in.Features) > 4 {
 			triggerValue = float64(in.Features[4])
 		}
+
+		log.Printf("[DEBUG] Fallback: triggerValue=%.2f, fallbackThreshold=%.2f", triggerValue, fallbackThreshold)
 		if triggerValue > fallbackThreshold {
 			isAnomaly = true
+			log.Println("[DEBUG] Fallback ha rilevato un'ANOMALIA.")
+		} else {
+			log.Println("[DEBUG] Fallback ha rilevato metrica NORMALE.")
 		}
 	} else {
 		analysisSource = "ML Model"
-		infResp := response.(*pb.InferenceResponse)
-		if infResp.Prediction == -1 { // Usiamo il modello IsolationForest
+		infResp = response.(*pb.InferenceResponse)
+		log.Printf("[DEBUG] Chiamata a inferenza RIUSCITA. Predizione del modello: %d", infResp.Prediction)
+		if infResp.Prediction == -1 {
 			isAnomaly = true
 		}
 	}
 
 	if !isAnomaly {
-		log.Printf("Metric is normal (Source: %s). Forwarding to storage.", analysisSource)
+		log.Printf("[DEBUG] Decisione finale: NORMALE. Sorgente: %s. Invio a StoreMetric...", analysisSource)
 		storeCtx := ctx
 		if analysisSource == "Threshold (Fallback)" {
 			storeCtx = context.Background()
@@ -89,7 +100,7 @@ func (s *server) AnalyzeMetric(ctx context.Context, in *pb.Metric) (*pb.Analysis
 	}
 
 	// Se arriviamo qui, la metrica è stata classificata come anomala
-	log.Printf("Potential anomaly detected for client %s from %s. Checking recent history...", in.SourceClientId, analysisSource)
+	log.Printf("[DEBUG] Decisione finale: ANOMALA. Sorgente: %s. Avvio logica di correlazione...", analysisSource)
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -105,8 +116,11 @@ func (s *server) AnalyzeMetric(ctx context.Context, in *pb.Metric) (*pb.Analysis
 	validTimestamps = append(validTimestamps, now)
 	s.suspiciousClients[in.SourceClientId] = validTimestamps
 
+	log.Printf("[DEBUG] Stato client '%s': %d anomalie recenti.", in.SourceClientId, len(validTimestamps))
+	log.Printf("[DEBUG] Controllo soglia: %d (attuali) >= %d (soglia)?", len(validTimestamps), anomalyThreshold)
+
 	if len(validTimestamps) >= anomalyThreshold {
-		log.Printf("--- ALARM TRIGGERED for client %s! (%d anomalies in last %v from %s) ---", in.SourceClientId, len(validTimestamps), timeWindow, analysisSource)
+		log.Printf("[DEBUG] SOGLIA SUPERATA! Generazione allarme critico.")
 		s.suspiciousClients[in.SourceClientId] = []time.Time{} // Resetta la storia
 
 		alarm := &pb.Alarm{
@@ -128,14 +142,12 @@ func (s *server) AnalyzeMetric(ctx context.Context, in *pb.Metric) (*pb.Analysis
 		return &pb.AnalysisResponse{Processed: true, Message: fmt.Sprintf("Correlated anomaly detected by %s and stored", analysisSource)}, nil
 	}
 
-	// Se non abbiamo raggiunto la soglia, l'anomalia è "sospetta".
-	// La salviamo come una metrica normale.
-	log.Printf("Suspicious metric from %s logged as normal. Count: %d/%d. Not enough to trigger alarm.", in.SourceClientId, len(validTimestamps), anomalyThreshold)
+	log.Printf("[DEBUG] Soglia NON superata. Salvo come metrica sospetta.")
 	storeCtx := ctx
 	if analysisSource == "Threshold (Fallback)" {
 		storeCtx = context.Background()
 	}
-	_, err = s.storageClient.StoreMetric(storeCtx, in) // <-- Salva come metrica normale
+	_, err = s.storageClient.StoreMetric(storeCtx, in)
 	if err != nil {
 		log.Printf("ERROR: could not store suspicious metric: %v", err)
 		return &pb.AnalysisResponse{Processed: false, Message: "Failed to store metric"}, err
