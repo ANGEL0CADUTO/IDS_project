@@ -129,21 +129,17 @@ services:
       - "8086:8086"
     volumes:
       - influxdb-data:/var/lib/influxdb2
-      # Montiamo il nostro script di setup nella directory di inizializzazione di InfluxDB
-      - ./influxdb/setup.sh:/docker-entrypoint-initdb.d/setup.sh
     environment:
-      # Credenziali di base per l'utente admin e l'organizzazione
+      # Usiamo di nuovo il setup integrato
+      - DOCKER_INFLUXDB_INIT_MODE=setup
       - DOCKER_INFLUXDB_INIT_USERNAME=admin
       - DOCKER_INFLUXDB_INIT_PASSWORD=password1234
       - DOCKER_INFLUXDB_INIT_ORG=ids-project
-      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=password123
-
-      # Variabili che il nostro script setup.sh userà
+      # Crea automaticamente il bucket 'metrics'
       - DOCKER_INFLUXDB_INIT_BUCKET=metrics
-      - INFLUXDB_ALARMS_BUCKET_NAME=alarms
+      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=password123
     networks:
       - ids-net
-
   grafana:
     image: grafana/grafana:latest # Puoi usare 'latest' o una versione specifica come '9.5.1'
     platform: linux/amd64
