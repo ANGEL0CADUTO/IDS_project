@@ -60,11 +60,25 @@ if ($Action -eq "aws-setup") {
     Run-RemoteCommand -Command $script
 }
 if ($Action -eq "aws-deploy") {
-    $script = "if [ -d 'IDS_project' ]; then cd IDS_project && git pull; else git clone https://github.com/ANGEL0CADUTO/IDS_project.git && cd IDS_project; fi; make down && make up"
+       $script = "if [ -d 'IDS_project' ]; then " +
+              "    echo 'Repository esistente, aggiorno...'; " +
+              "    cd IDS_project && git pull; " +
+              "else " +
+              "    echo 'Clonazione del repository...'; " +
+              "    git clone https://github.com/ANGEL0CADUTO/IDS_project.git && cd IDS_project; " +
+              "fi; " +
+              "echo 'Imposto i permessi di esecuzione per lo script di setup...'; " +
+              "chmod +x influxdb/setup.sh; " +
+              "echo 'Eseguo make down e make up...'; " +
+              "make down && make up"
+
     Run-RemoteCommand -Command $script
 }
 if ($Action -eq "aws-up") {
     Run-RemoteCommand -Command "cd IDS_project && docker compose up -d $Service"
+}
+if ($Action -eq "aws-create-alarms-bucket") {
+    Run-RemoteCommand -Command "cd IDS_project && make create-alarms-bucket"
 }
 if ($Action -eq "aws-down") {
     Run-RemoteCommand -Command "cd IDS_project && docker compose stop $Service"

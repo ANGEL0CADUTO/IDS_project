@@ -18,7 +18,7 @@ AWS_SSH := ssh -i $(AWS_KEY) -t $(AWS_USER)@$(AWS_HOST)
 # Variabile per specificare un singolo servizio nei comandi up/down/stop
 SERVICE ?=
 
-.PHONY: all help build up down logs test test-unit test-system test-client-benign test-client-malicious clean clean-all clean-influx clean-grafana aws-help aws-setup aws-deploy aws-up aws-down aws-logs aws-clean-all aws-clean-influx
+.PHONY: all help build up down logs test test-unit test-system test-client-benign test-client-malicious clean clean-all clean-influx clean-grafana aws-help aws-setup aws-deploy aws-up aws-down aws-logs aws-clean-all aws-clean-influx create-alarms-bucket
 
 # ==============================================================================
 # Sezione di Aiuto
@@ -117,7 +117,13 @@ clean-grafana:
 	@echo "-> (Locale) Fermo dei container e rimozione del volume di Grafana..."
 	docker compose down
 	docker volume rm ids-project_grafana-data || true
-
+create-alarms-bucket:
+	@echo "-> Creazione del bucket 'alarms' in InfluxDB..."
+	@docker compose exec influxdb influx bucket create \
+		--name alarms \
+		--org ids-project \
+		--token password123 \
+		--retention 0
 
 # ==============================================================================
 # Comandi Remoti (AWS)
