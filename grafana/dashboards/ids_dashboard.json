@@ -24,8 +24,7 @@
     {
       "datasource": {
         "type": "jaeger",
-        "uid": "eesimz2ssagw0d"
-      },
+        "uid": "Jaeger",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -140,7 +139,7 @@
     {
       "datasource": {
         "type": "influxdb",
-        "uid": "besi266358ruoa"
+        "uid": "InfluxDB"
       },
       "fieldConfig": {
         "defaults": {
@@ -867,7 +866,7 @@
     {
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
-        "uid": "aesitwiibvri8e"
+        "uid": "Infinity"
       },
       "fieldConfig": {
         "defaults": {

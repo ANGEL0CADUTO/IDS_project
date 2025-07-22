@@ -1,7 +1,8 @@
-
+# Questo file configurerà automaticamente tutti i data source necessari.
 apiVersion: 1
 
 datasources:
+  # 1. Data Source per InfluxDB
   - name: InfluxDB
     type: influxdb
     access: proxy
@@ -10,5 +11,24 @@ datasources:
       version: Flux
       org: ids-project
       defaultBucket: metrics
+    # Usiamo il token admin originale che sappiamo funzionare
     secureJsonData:
-      token: "password123" # Usa il tuo token
+      token: "password123"
+
+  # 2. Data Source per Jaeger
+  - name: Jaeger
+    type: jaeger
+    access: proxy
+    url: http://jaeger:16686
+    jsonData:
+      tracesToLogs:
+        datasourceUid: 'loki' # Placeholder, non serve per ora
+        tags: ['ip']
+
+  # 3. Data Source per Infinity (Consul)
+  - name: Infinity
+    type: yesoreyeram-infinity-datasource
+    access: proxy
+    url: http://consul:8500 # URL base per le chiamate a Consul
+    jsonData:
+      global_queries: []
