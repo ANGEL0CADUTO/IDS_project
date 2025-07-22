@@ -129,24 +129,35 @@ services:
       - "8086:8086"
     volumes:
       - influxdb-data:/var/lib/influxdb2
+      # Montiamo il nostro script di setup nella directory di inizializzazione di InfluxDB
+      - ./influxdb/setup.sh:/docker-entrypoint-initdb.d/setup.sh
     environment:
-      - DOCKER_INFLUXDB_INIT_MODE=setup
+      # Credenziali di base per l'utente admin e l'organizzazione
       - DOCKER_INFLUXDB_INIT_USERNAME=admin
       - DOCKER_INFLUXDB_INIT_PASSWORD=password1234
       - DOCKER_INFLUXDB_INIT_ORG=ids-project
-      - DOCKER_INFLUXDB_INIT_BUCKET=metrics
       - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=password123
+
+      # Variabili che il nostro script setup.sh userà
+      - DOCKER_INFLUXDB_INIT_BUCKET=metrics
+      - INFLUXDB_ALARMS_BUCKET_NAME=alarms
     networks:
       - ids-net
 
   grafana:
-    image: grafana/grafana:latest
+    image: grafana/grafana:latest # Puoi usare 'latest' o una versione specifica come '9.5.1'
     platform: linux/amd64
     container_name: grafana
     ports:
       - "3000:3000"
     volumes:
+      # Volume per la persistenza dei dati (es. modifiche manuali, utenti)
       - grafana-data:/var/lib/grafana
+      # Volumi per il provisioning automatico
+      - ./grafana/provisioning/datasources:/etc/grafana/provisioning/datasources
+      - ./grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards
+      - ./grafana/dashboards:/etc/grafana/dashboards
+      - ./grafana/provisioning/alerting:/etc/grafana/provisioning/alerting
     depends_on:
       - influxdb
     networks:

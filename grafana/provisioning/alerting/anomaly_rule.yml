@@ -1,0 +1,78 @@
+apiVersion: 1
+groups:
+    - orgId: 1
+      name: eval
+      folder: IDS Alerts
+      interval: 1m
+      rules:
+        - uid: cesjpj9tjcv7kc
+          title: Allarme IDS rilevato
+          condition: C
+          data:
+            - refId: A
+              relativeTimeRange:
+                from: 600
+                to: 0
+              datasourceUid: besi266358ruoa
+              model:
+                intervalMs: 1000
+                maxDataPoints: 43200
+                query: "from(bucket: \"alarms\")\r\n  |> range(start: -30s) // Guarda solo gli ultimi 30 secondi\r\n  |> filter(fn: (r) => r[\"_measurement\"] == \"alarm\" and r[\"_field\"] == \"description\")\r\n  // 1. Raggruppa gli allarmi per ogni client_id\r\n  |> group(columns: [\"client_id\"])\r\n  // 2. Conta quanti allarmi ha generato ogni client\r\n  |> count()\r\n  // 3. Filtra e mantieni solo i client che hanno superato la soglia di 3\r\n  |> filter(fn: (r) => r._value >= 3)\r\n  // 4. Conta quanti client hanno superato la soglia\r\n  |> group()\r\n  |> count()\r\n  |> toFloat()"
+                refId: A
+            - refId: B
+              datasourceUid: __expr__
+              model:
+                conditions:
+                    - evaluator:
+                        params: []
+                        type: gt
+                      operator:
+                        type: and
+                      query:
+                        params:
+                            - B
+                      reducer:
+                        params: []
+                        type: last
+                      type: query
+                datasource:
+                    type: __expr__
+                    uid: __expr__
+                expression: A
+                intervalMs: 1000
+                maxDataPoints: 43200
+                reducer: last
+                refId: B
+                type: reduce
+            - refId: C
+              datasourceUid: __expr__
+              model:
+                conditions:
+                    - evaluator:
+                        params:
+                            - 0
+                        type: gt
+                      operator:
+                        type: and
+                      query:
+                        params:
+                            - C
+                      reducer:
+                        params: []
+                        type: last
+                      type: query
+                datasource:
+                    type: __expr__
+                    uid: __expr__
+                expression: B
+                intervalMs: 1000
+                maxDataPoints: 43200
+                refId: C
+                type: threshold
+          noDataState: NoData
+          execErrState: Error
+          annotations: {}
+          labels: {}
+          isPaused: false
+          notification_settings:
+            receiver: grafana-default-email
