@@ -24,7 +24,8 @@
     {
       "datasource": {
         "type": "jaeger",
-        "uid": "Jaeger",
+        "uid": "eesimz2ssagw0d"
+      },
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -123,7 +124,7 @@
         {
           "datasource": {
             "type": "jaeger",
-            "uid": "eesimz2ssagw0d"
+            "uid": "Jaeger"
           },
           "limit": 5000,
           "minDuration": "",

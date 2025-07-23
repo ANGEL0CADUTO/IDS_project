@@ -5,7 +5,7 @@
 # --- CONFIGURAZIONE ---
 # Modifica queste variabili con i tuoi dati
 $KeyPath = "C:\Users\aroma\.ssh\ids-project-key.pem"
-$Ec2Ip = "3.85.86.100"
+$Ec2Ip = "107.23.198.95"
 $Ec2User = "ubuntu"
 # --------------------
 
