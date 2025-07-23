@@ -77,6 +77,9 @@ if ($Action -eq "aws-deploy") {
 if ($Action -eq "aws-up") {
     Run-RemoteCommand -Command "cd IDS_project && docker compose up -d $Service"
 }
+if ($Action -eq "aws-clean-grafana") {
+    Run-RemoteCommand -Command "cd IDS_project && make clean-grafana"
+}
 if ($Action -eq "aws-create-alarms-bucket") {
     Run-RemoteCommand -Command "cd IDS_project && make create-alarms-bucket"
 }

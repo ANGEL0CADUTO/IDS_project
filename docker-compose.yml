@@ -150,10 +150,6 @@ services:
       # Volume per la persistenza dei dati (es. modifiche manuali, utenti)
       - grafana-data:/var/lib/grafana
       # Volumi per il provisioning automatico
-      - ./grafana/provisioning/datasources:/etc/grafana/provisioning/datasources
-      - ./grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards
-      - ./grafana/dashboards:/etc/grafana/dashboards
-      - ./grafana/provisioning/alerting:/etc/grafana/provisioning/alerting
     depends_on:
       - influxdb
     networks:
