@@ -24,7 +24,7 @@
     {
       "datasource": {
         "type": "jaeger",
-        "uid": "eesimz2ssagw0d"
+        "uid": "Jaeger"
       },
       "fieldConfig": {
         "defaults": {
@@ -254,7 +254,7 @@
         {
           "datasource": {
             "type": "influxdb",
-            "uid": "besi266358ruoa"
+            "uid": "InfluxDB"
           },
           "query": "from(bucket: \"metrics\")\r\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\r\n  |> filter(fn: (r) => r[\"_measurement\"] == \"network_traffic\" and r[\"_field\"] == \"duration\")\r\n\r\n  // PASSO 1: Unifica tutte le serie dei client in una sola.\r\n  |> group()\r\n\r\n  |> aggregateWindow(every: 5s, fn: count, createEmpty: false)\r\n\r\n  // PASSO 3: Rinomina la colonna del valore. Questo darà il nome alla serie.\r\n  |> rename(columns: {_value: \"normale\"})\r\n\r\n  |> group()",
           "refId": "A"
@@ -262,7 +262,7 @@
         {
           "datasource": {
             "type": "influxdb",
-            "uid": "besi266358ruoa"
+            "uid": "InfluxDB"
           },
           "hide": false,
           "query": "from(bucket: \"alarms\")\r\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\r\n  |> filter(fn: (r) => r[\"_measurement\"] == \"alarm\" and r[\"_field\"] == \"description\")\r\n\r\n  // PASSO 1: Unifica tutte le serie\r\n  |> group()\r\n\r\n  // PASSO 2: Aggrega per finestra\r\n  |> aggregateWindow(every: 5s, fn: count, createEmpty: false)\r\n\r\n  // PASSO 3: Rinomina la colonna del valore\r\n  |> rename(columns: {_value: \"allarmi\"})\r\n\r\n  // PASSO 4: Distruggi il group key finale\r\n  |> group()",
@@ -281,7 +281,7 @@
     {
       "datasource": {
         "type": "influxdb",
-        "uid": "besi266358ruoa"
+        "uid": "InfluxDB"
       },
       "fieldConfig": {
         "defaults": {
@@ -374,7 +374,7 @@
         {
           "datasource": {
             "type": "influxdb",
-            "uid": "besi266358ruoa"
+            "uid": "InfluxDB"
           },
           "query": "from(bucket: \"alarms\")\r\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\r\n  |> filter(fn: (r) => r[\"_measurement\"] == \"alarm\" and r[\"_field\"] == \"description\")\r\n  // 1. Raggruppa per client_id. Questo crea una tabella separata per ogni client.\r\n  |> group(columns: [\"client_id\"])\r\n  // 2. Conta gli allarmi in ogni tabella.\r\n  |> count()\r\n  // 3. Rinomina la colonna del valore per una legenda chiara.\r\n  |> rename(columns: {_value: \"numero_allarmi\"})\r\n  // 4. Ordina i risultati e prendi i primi 5. Questo funziona ancora sulle tabelle separate.\r\n  |> sort(columns: [\"numero_allarmi\"], desc: true)\r\n  |> limit(n: 5)\r\n  // --- LA MODIFICA CHIAVE CHE RISOLVE TUTTO ---\r\n  // 5. Rimuovi tutti i raggruppamenti. Questo unisce le 5 tabelle risultanti in una\r\n  //    sola, rendendo \"client_id\" una colonna di stringhe normale che Grafana può usare.\r\n  |> group()",
           "refId": "A"
@@ -386,7 +386,7 @@
     {
       "datasource": {
         "type": "influxdb",
-        "uid": "besi266358ruoa"
+        "uid": "InfluxDB"
       },
       "fieldConfig": {
         "defaults": {
@@ -485,7 +485,7 @@
         {
           "datasource": {
             "type": "influxdb",
-            "uid": "besi266358ruoa"
+            "uid": "InfluxDB"
           },
           "query": "from(bucket: \"metrics\")\r\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\r\n  |> filter(fn: (r) => r[\"_measurement\"] == \"network_traffic\" and r[\"_field\"] == \"duration\")\r\n\r\n  // PASSO 1: Unifica tutte le serie dei client in una sola.\r\n  |> group()\r\n\r\n  |> aggregateWindow(every: 5s, fn: count, createEmpty: false)\r\n\r\n  // PASSO 3: Rinomina la colonna del valore. Questo darà il nome alla serie.\r\n  |> rename(columns: {_value: \"normale\"})\r\n\r\n  |> group()",
           "refId": "A"
@@ -497,7 +497,7 @@
     {
       "datasource": {
         "type": "influxdb",
-        "uid": "besi266358ruoa"
+        "uid": "InfluxDB"
       },
       "fieldConfig": {
         "defaults": {
@@ -571,7 +571,7 @@
         {
           "datasource": {
             "type": "influxdb",
-            "uid": "besi266358ruoa"
+            "uid": "InfluxDB"
           },
           "query": "// Isola i dati numerici che ci interessano\r\nc = from(bucket: \"alarms\")\r\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\r\n  |> filter(fn: (r) => r[\"_measurement\"] == \"alarm\" and r[\"_field\"] == \"trigger_count\")\r\n  |> keep(columns: [\"_time\", \"client_id\", \"rule_id\", \"_value\"])\r\n  |> rename(columns: {_value: \"trigger_count\"})\r\n\r\ns_bytes = from(bucket: \"alarms\")\r\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\r\n  |> filter(fn: (r) => r[\"_measurement\"] == \"alarm\" and r[\"_field\"] == \"trigger_src_bytes\")\r\n  |> keep(columns: [\"_time\", \"client_id\", \"rule_id\", \"_value\"])\r\n  |> rename(columns: {_value: \"trigger_src_bytes\"})\r\n\r\ns_rate = from(bucket: \"alarms\")\r\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\r\n  |> filter(fn: (r) => r[\"_measurement\"] == \"alarm\" and r[\"_field\"] == \"trigger_serror_rate\")\r\n  |> keep(columns: [\"_time\", \"client_id\", \"rule_id\", \"_value\"])\r\n  |> rename(columns: {_value: \"trigger_serror_rate\"})\r\n\r\n// Unisci le tabelle numeriche\r\nj1 = join(tables: {c: c, sb: s_bytes}, on: [\"_time\", \"client_id\", \"rule_id\"])\r\nj2 = join(tables: {j1: j1, sr: s_rate}, on: [\"_time\", \"client_id\", \"rule_id\"])\r\n\r\n// Ora ordina e limita\r\nj2\r\n  |> group()\r\n  |> sort(columns: [\"_time\"], desc: true)\r\n  |> limit(n: 15)",
           "refId": "A"
@@ -606,7 +606,7 @@
     {
       "datasource": {
         "type": "influxdb",
-        "uid": "besi266358ruoa"
+        "uid": "InfluxDB"
       },
       "fieldConfig": {
         "defaults": {
@@ -723,7 +723,7 @@
         {
           "datasource": {
             "type": "influxdb",
-            "uid": "besi266358ruoa"
+            "uid": "InfluxDB"
           },
           "query": "from(bucket: \"alarms\")\r\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\r\n  |> filter(fn: (r) => r[\"_measurement\"] == \"alarm\" and r[\"_field\"] == \"description\")\r\n\r\n  // PASSO 1: Unifica tutte le serie\r\n  |> group()\r\n\r\n  // PASSO 2: Aggrega per finestra\r\n  |> aggregateWindow(every: 5s, fn: count, createEmpty: false)\r\n\r\n  // PASSO 3: Rinomina la colonna del valore\r\n  |> rename(columns: {_value: \"allarmi\"})\r\n\r\n  // PASSO 4: Distruggi il group key finale\r\n  |> group()",
           "refId": "A"
@@ -735,7 +735,7 @@
     {
       "datasource": {
         "type": "influxdb",
-        "uid": "besi266358ruoa"
+        "uid": "InfluxDB"
       },
       "fieldConfig": {
         "defaults": {
@@ -846,7 +846,7 @@
         {
           "datasource": {
             "type": "influxdb",
-            "uid": "besi266358ruoa"
+            "uid": "InfluxDB"
           },
           "query": "from(bucket: \"metrics\")\r\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\r\n  |> filter(fn: (r) => r[\"_measurement\"] == \"network_traffic\" and r[\"_field\"] == \"duration\")\r\n  |> group()\r\n  |> count()\r\n  |> rename(columns: {_value: \"Traffico Normale\"})\r\n  |> group()",
           "refId": "A"
@@ -854,7 +854,7 @@
         {
           "datasource": {
             "type": "influxdb",
-            "uid": "besi266358ruoa"
+            "uid": "InfluxDB"
           },
           "hide": false,
           "query": "from(bucket: \"alarms\")\r\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\r\n  |> filter(fn: (r) => r[\"_measurement\"] == \"alarm\" and r[\"_field\"] == \"description\")\r\n  |> group()\r\n  |> count()\r\n  |> rename(columns: {_value: \"Allarmi Rilevati\"})\r\n  |> group()",
@@ -920,7 +920,7 @@
           "columns": [],
           "datasource": {
             "type": "yesoreyeram-infinity-datasource",
-            "uid": "aesitwiibvri8e"
+            "uid": "Infinity"
           },
           "filters": [],
           "format": "table",
@@ -954,7 +954,7 @@
     {
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
-        "uid": "aesitwiibvri8e"
+        "uid": "Infinity"
       },
       "fieldConfig": {
         "defaults": {
@@ -1007,7 +1007,7 @@
           "columns": [],
           "datasource": {
             "type": "yesoreyeram-infinity-datasource",
-            "uid": "aesitwiibvri8e"
+            "uid": "Infinity"
           },
           "filters": [],
           "format": "table",
@@ -1041,7 +1041,7 @@
     {
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
-        "uid": "aesitwiibvri8e"
+        "uid": "Infinity"
       },
       "fieldConfig": {
         "defaults": {
@@ -1094,7 +1094,7 @@
           "columns": [],
           "datasource": {
             "type": "yesoreyeram-infinity-datasource",
-            "uid": "aesitwiibvri8e"
+            "uid": "Infinity"
           },
           "filters": [],
           "format": "table",
@@ -1127,7 +1127,7 @@
     {
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
-        "uid": "aesitwiibvri8e"
+        "uid": "Infinity"
       },
       "fieldConfig": {
         "defaults": {
@@ -1180,7 +1180,7 @@
           "columns": [],
           "datasource": {
             "type": "yesoreyeram-infinity-datasource",
-            "uid": "aesitwiibvri8e"
+            "uid": "Infinity"
           },
           "filters": [],
           "format": "table",

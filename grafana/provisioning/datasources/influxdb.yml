@@ -4,6 +4,7 @@ apiVersion: 1
 datasources:
   # 1. Data Source per InfluxDB
   - name: InfluxDB
+    uid: InfluxDB
     type: influxdb
     access: proxy
     url: http://influxdb:8086
@@ -17,6 +18,7 @@ datasources:
 
   # 2. Data Source per Jaeger
   - name: Jaeger
+    uid: Jaeger
     type: jaeger
     access: proxy
     url: http://jaeger:16686
@@ -27,6 +29,7 @@ datasources:
 
   # 3. Data Source per Infinity (Consul)
   - name: Infinity
+    uid: Infinity
     type: yesoreyeram-infinity-datasource
     access: proxy
     url: http://consul:8500 # URL base per le chiamate a Consul

@@ -1,0 +1,18 @@
+# Local development
+.idea/
+.vscode/
+*.iml
+.venv/
+venv/
+.env
+__pycache__/
+*.py[cod]
+
+# Build and test output
+*.exe
+/bin/
+/coverage.out
+*.log
+
+# Operating system files
+.DS_Store

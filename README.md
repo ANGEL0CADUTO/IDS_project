@@ -1,101 +1,147 @@
-# Sistema di Rilevamento Intrusioni Distribuito (IDS)
+# Distributed Intrusion Detection System
 
-Questo progetto è un'implementazione di un Intrusion Detection System (IDS) basato su un'architettura a microservizi, sviluppato per il corso di Sistemi Distribuiti e Cloud Computing. Il sistema è progettato per essere resiliente, scalabile e osservabile, utilizzando un moderno stack tecnologico incentrato su Go, gRPC e Docker.
+A coursework project for Distributed Systems and Cloud Computing, built with Go, Python, gRPC and Docker Compose. The system processes network-traffic records, detects anomalies with an Isolation Forest model, correlates suspicious events by client and stores metrics and alarms in InfluxDB.
 
-## Architettura
+The test client replays NSL-KDD records. It does not capture live network packets or perform the attacks described by the dataset labels.
 
-Il sistema è composto da 4 microservizi principali, un service registry, un database time-series e uno stack di osservabilità completo.
+## Architecture
 
-- **Collector Service (Go):** Punto di ingresso (entrypoint) che riceve le metriche di rete dai client.
-- **Analysis Service (Go):** Il cuore del sistema. Orchestra l'analisi delle metriche, interroga il modello di Machine Learning e implementa una logica di fallback tramite un Circuit Breaker.
-- **Inference Service (Python):** Servizio gRPC specializzato che ospita un modello ML (Isolation Forest) per il rilevamento delle anomalie.
-- **Storage Service (Go):** Unico punto di accesso al database, responsabile della persistenza di metriche e allarmi.
+| Service | Responsibility |
+| --- | --- |
+| Collector, Go | Receive metrics over gRPC, discover healthy analysis instances and route clients using a hash of their identifier |
+| Analysis, Go | Request a prediction, apply circuit-breaker fallback and correlate anomalies within a time window |
+| Inference, Python | Serve the saved Isolation Forest model over gRPC; return `1` for normal traffic and `-1` for an anomaly |
+| Storage, Go | Write traffic metrics and correlated alarms to separate InfluxDB buckets |
 
-L'infrastruttura di supporto include:
-- **Consul:** Per il Service Discovery e l'Health Checking.
-- **InfluxDB:** Come database time-series per la memorizzazione dei dati.
-- **Jaeger:** Per il Distributed Tracing e l'analisi delle performance.
-- **Grafana:** Per la visualizzazione dei dati e il monitoraggio in tempo reale.
+Consul provides service discovery and health checks. OpenTelemetry exports distributed traces to Jaeger. Grafana displays metrics, traces and service information. Compose starts two analysis replicas. Routing uses the client identifier and the current discovery list. A change in the list's order or healthy instances can move a client to another replica; correlation history is kept in memory and is not replicated between instances.
 
-![Diagramma Architettura](images/ArchitetturaSistema.PNG)
-![Diagramma Grafana](images/Grafana.PNG)
-![Diagramma Consul](images/Consul.PNG)
-![Diagramma Tracing](images/Tracing.PNG)
+![System architecture](images/ArchitetturaSistema.PNG)
 
-## Pattern Implementati
+## Run locally
 
-- **Service Registry & Health Check (Consul)**
-- **Circuit Breaker (in `analysis-service`)**
-- **Client-Side Load Balancing (in `collector-service`)**
-- **Distributed Tracing (OpenTelemetry & Jaeger)**
-- **Externalized Configuration (Docker Compose)**
-- **Container per Service (Docker)**
-
-## Prerequisiti
-
-Per eseguire il progetto, sono necessari i seguenti strumenti:
-- [Docker](https://www.docker.com/products/docker-desktop/)
-- [Docker Compose](https://docs.docker.com/compose/) (solitamente incluso in Docker Desktop)
-- [Go](https://go.dev/doc/install) (versione 1.20 o superiore, necessario per il client di test)
-
-## Guida all'Esecuzione
-
-Questo progetto utilizza un `Makefile` per semplificare la gestione dell'applicazione. Aprire un terminale nella root del progetto ed eseguire i seguenti comandi.
-
-### 1. Avvio Completo del Sistema
-
-Questo comando costruisce le immagini Docker (se non esistono) e avvia tutti i servizi in background.
+Requirements: Docker Engine with Docker Compose, GNU Make, and Go 1.23.11 or newer for the client and Go tests. Run the commands from the repository root.
 
 ```bash
 make up
+docker compose ps
 ```
 
-**2. Generare Traffico di Test:**
-Per popolare il sistema con dati, esegui il client di test. Il client simula 5 utenti concorrenti che inviano dati dal dataset NSL-KDD.
+`make up` rebuilds the images without the build cache, then starts the services. After InfluxDB is ready, create the alarms bucket on the first run:
+
 ```bash
-make test-client
+make create-alarms-bucket
 ```
 
-**3. Monitorare il Sistema:**
-Mentre il sistema è in esecuzione, puoi accedere alle seguenti interfacce web:
+InfluxDB creates the `metrics` bucket during initialisation. The command above creates the separate `alarms` bucket; it is not necessary if that bucket already exists in the persistent volume.
 
-| Servizio | URL | Credenziali |
-| :--- | :--- | :--- |
-| **Grafana** | `http://localhost:3000` | `admin` / `admin` |
-| **Jaeger** | `http://localhost:16686` | N/A |
-| **Consul** | `http://localhost:8500` | N/A |
+Generate traffic in a second terminal:
 
-**4. Visualizzare i Log:**
-Per vedere i log di tutti i servizi in tempo reale:
+```bash
+make test-client-benign
+make test-client-malicious
+```
+
+Each command starts five concurrent clients with 200 records per client. The two modes select normal or attack-labelled records from `KDDTest+.txt`.
+
+For a shorter run, use the client flags directly:
+
+```bash
+go run ./cmd/test-client -mode=benign -addr=localhost:50051 -clients=1 -records=20 -delay=500
+```
+
+`-records=0` runs continuously. Keep `-delay` positive. The client derives categorical encodings from the root `KDDTrain+.txt`, using the same alphabetical ordering as the training script's LabelEncoder. Unknown categories currently map to zero.
+
+## Interfaces and observability
+
+| Interface | URL |
+| --- | --- |
+| Grafana | http://localhost:3000 |
+| Jaeger | http://localhost:16686 |
+| Consul | http://localhost:8500 |
+| InfluxDB | http://localhost:8086 |
+
+Grafana starts with `admin` / `admin`. The Compose credentials and tokens are demo defaults for this local environment.
+
+The Grafana provisioning directory and dashboard are mounted by Compose, with consistent datasource UIDs. The Infinity plugin is installed at startup using [Grafana's plugin preinstallation setting](https://grafana.com/docs/grafana/latest/administration/plugin-management/plugin-install/), which requires internet access on the first start.
+
 ```bash
 make logs
 ```
 
-**5. Fermare l'Applicazione:**
-Per fermare e rimuovere tutti i container:
+Screenshots from the original project:
+
+![Grafana dashboard](images/Grafana.PNG)
+![Consul services](images/Consul.PNG)
+![Distributed tracing](images/Tracing.PNG)
+
+## Detection and fallback
+
+The analysis service uses these Compose defaults:
+
+- `ALARM_THRESHOLD=4`: correlate four anomalies from the same client before emitting an alarm.
+- `ALARM_WINDOW_SECONDS=60`: retain anomalies within a 60-second window.
+- `FALLBACK_THRESHOLD=95.0`: if inference fails or the circuit breaker is open, compare the metric's value, or feature 4 (`src_bytes`) when that value is zero, against this threshold.
+
+To exercise fallback while the client is running:
+
+```bash
+docker compose stop inference
+docker compose logs -f analysis
+```
+
+Restart inference with `docker compose start inference`. The fallback is a simple threshold rule, not an equivalent replacement for the trained model.
+
+## Tests and build checks
+
+```bash
+make test-unit
+go build ./... ./pkg/consul/... ./pkg/tracing/... ./tests/...
+```
+
+Unit tests cover record conversion, categorical encoding, normal metrics, correlated alarms and inference-failure fallback. They use mock services and do not require Docker.
+
+System tests require the running stack and both InfluxDB buckets:
+
+```bash
+make test-system
+make test
+```
+
+`make test` explicitly includes the separate `tests` Go module. System tests send records to the collector, query InfluxDB and include a resilience scenario that stops inference.
+
+## Model and dataset
+
+The repository includes `KDDTrain+.txt`, `KDDTest+.txt` and the saved model at `services/inference/isolation_forest_model.joblib`. Training uses 41 features, encodes categorical columns with LabelEncoder and fits an Isolation Forest with 100 estimators and `random_state=42`. Dataset labels are excluded from fitting.
+
+Use Python 3.12 and the pinned Python environment to retrain:
+
+```bash
+python3.12 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r services/inference/requirements.txt
+python ml-training/train_model.py
+```
+
+Check the saved model and the Python gRPC interface without starting Consul or Docker:
+
+```bash
+python -m unittest discover -s services/inference -p 'test_*.py'
+```
+
+The training script resolves paths relative to its location and overwrites the saved model. The committed model was created with scikit-learn 1.7.0; the inference requirements retain that version. Prediction output and unit tests do not establish detection accuracy. There is no verified classification benchmark in this repository.
+
+## Stop and clean up
+
 ```bash
 make down
 ```
 
-**6. Pulizia Completa (ATTENZIONE):**
-Per fermare i container e rimuovere tutti i dati persistenti (database e configurazioni di Grafana):
-```bash
-make clean
-```
+`make down` and `make clean` stop containers and preserve volumes. `make clean-all` also deletes the InfluxDB and Grafana volumes. The `clean-influx` and `clean-grafana` targets remove the respective named volume; check its Compose project prefix when using them.
 
-## Test di Resilienza (Circuit Breaker)
-Per testare la capacità del sistema di resistere a guasti:
-1. Avvia il sistema con `make up` e genera traffico con `make test-client`.
-2. Osserva la dashboard di Grafana.
-3. Spegni il servizio di inferenza per simulare un guasto:
-   ```bash
-   docker compose stop inference
-   ```
-4. Osserva i log di `analysis-service` e la reazione della dashboard: il sistema continuerà a funzionare utilizzando la logica di fallback.
-5. Riavvia il servizio per vedere l'auto-guarigione:
-   ```bash
-   docker compose start inference
-   ```
+The AWS targets and PowerShell script are inherited deployment helpers. Configure their host and SSH-key settings for your own environment before using remote commands.
 
-## Autore
-- **Angelo Romano**
+## Verification status
+
+Checked with Go 1.23.11 and Python 3.12: unit tests, Go compilation across all four modules, saved-model loading with scikit-learn 1.7.0, and a local gRPC prediction request. The training script also completed on all 125,973 training records in an isolated directory, preserving the committed model. Compose configuration and Grafana datasource references were checked statically.
+
+The complete Docker stack, system tests and restored Grafana provisioning have not been rerun in the current recovery environment, which has no Docker daemon.

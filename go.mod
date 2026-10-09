@@ -64,7 +64,6 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20250715232539-7130f93afb79 // indirect
 )
 
-// --- AGGIUNGI QUESTO BLOCCO ALLA FINE ---
 replace github.com/ANGEL0CADUTO/IDS_project/pkg/consul => ./pkg/consul
 
 replace github.com/ANGEL0CADUTO/IDS_project/pkg/tracing => ./pkg/tracing

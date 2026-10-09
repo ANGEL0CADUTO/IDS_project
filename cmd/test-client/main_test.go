@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 )
@@ -70,5 +72,26 @@ func TestRecordToFeatures(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestCategoricalEncodingMatchesTrainingOrder(t *testing.T) {
+	dataset := filepath.Join(t.TempDir(), "train.csv")
+	rows := "0,udp,http,SF\n0,tcp,ftp,REJ\n0,icmp,dns,S0\n"
+	if err := os.WriteFile(dataset, []byte(rows), 0600); err != nil {
+		t.Fatal(err)
+	}
+	buildCategoricalMaps(dataset)
+	if !reflect.DeepEqual(protocolMap, map[string]float32{"icmp": 0, "tcp": 1, "udp": 2}) ||
+		!reflect.DeepEqual(serviceMap, map[string]float32{"dns": 0, "ftp": 1, "http": 2}) ||
+		!reflect.DeepEqual(flagMap, map[string]float32{"REJ": 0, "S0": 1, "SF": 2}) {
+		t.Fatalf("Categorical encoding differs from sorted training labels: %v %v %v", protocolMap, serviceMap, flagMap)
+	}
+	if err := os.WriteFile(dataset, []byte("0,tcp,http,SF\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	buildCategoricalMaps(dataset)
+	if len(protocolMap) != 1 || protocolMap["tcp"] != 0 {
+		t.Fatal("Rebuilding the maps retained categories from the previous dataset")
 	}
 }
