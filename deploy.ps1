@@ -47,7 +47,7 @@ if ($Action -eq "build")          { Run-LocalCommand "docker compose build --no-
 if ($Action -eq "up")             { Run-LocalCommand "docker compose up -d" }
 if ($Action -eq "down")           { Run-LocalCommand "docker compose down" }
 if ($Action -eq "logs")           { Run-LocalCommand "docker compose logs -f" }
-if ($Action -eq "test")           { Run-LocalCommand "go test -v -count=1 ./..." }
+if ($Action -eq "test")           { Run-LocalCommand "go test -v -count=1 ./... ./tests/..." }
 if ($Action -eq "test-benign")    { Run-LocalCommand "go run ./cmd/test-client/main.go -mode=benign -addr=localhost:50051" }
 if ($Action -eq "test-malicious") { Run-LocalCommand "go run ./cmd/test-client/main.go -mode=malicious -addr=localhost:50051" }
 if ($Action -eq "clean-all")      { Run-LocalCommand "docker compose down -v" }

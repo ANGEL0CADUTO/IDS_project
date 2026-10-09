@@ -9,6 +9,7 @@ import (
 	"log"
 	"math/rand"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -19,7 +20,6 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
-// I percorsi dei file rimangono costanti perché sono legati al codice
 const (
 	trainFilePath = "KDDTrain+.txt"
 	testFilePath  = "KDDTest+.txt"
@@ -31,8 +31,10 @@ var (
 	flagMap     = make(map[string]float32)
 )
 
-// Le funzioni buildCategoricalMaps e recordToFeatures rimangono invariate...
 func buildCategoricalMaps(filePath string) {
+	protocolMap = make(map[string]float32)
+	serviceMap = make(map[string]float32)
+	flagMap = make(map[string]float32)
 	file, err := os.Open(filePath)
 	if err != nil {
 		log.Fatalf("Impossibile aprire il file: %v", filePath)
@@ -48,14 +50,20 @@ func buildCategoricalMaps(filePath string) {
 		if err != nil || len(record) < 4 {
 			continue
 		}
-		if _, exists := protocolMap[record[1]]; !exists {
-			protocolMap[record[1]] = float32(len(protocolMap))
+		protocolMap[record[1]] = 0
+		serviceMap[record[2]] = 0
+		flagMap[record[3]] = 0
+	}
+
+	// Match the alphabetical ordering used by LabelEncoder during training.
+	for _, categories := range []map[string]float32{protocolMap, serviceMap, flagMap} {
+		keys := make([]string, 0, len(categories))
+		for key := range categories {
+			keys = append(keys, key)
 		}
-		if _, exists := serviceMap[record[2]]; !exists {
-			serviceMap[record[2]] = float32(len(serviceMap))
-		}
-		if _, exists := flagMap[record[3]]; !exists {
-			flagMap[record[3]] = float32(len(flagMap))
+		sort.Strings(keys)
+		for index, key := range keys {
+			categories[key] = float32(index)
 		}
 	}
 }

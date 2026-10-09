@@ -94,7 +94,7 @@ test-client-malicious:
 
 test:
 	@echo "-> (Locale) Esecuzione di tutti i test..."
-	go test -v -count=1 ./...
+	go test -v -count=1 ./... ./tests/...
 
 test-unit:
 	@echo "-> (Locale) Esecuzione dei test unitari..."

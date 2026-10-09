@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pandas as pd
 from sklearn.ensemble import IsolationForest
 from sklearn.preprocessing import LabelEncoder
@@ -18,7 +20,7 @@ col_names = ["duration", "protocol_type", "service", "flag", "src_bytes", "dst_b
 
 # Carichiamo il dataset, usando il parametro 'comment' per ignorare l'header ARFF
 # Le righe che iniziano con '@' verranno trattate come commenti e saltate.
-df = pd.read_csv("KDDTrain+.txt", header=None, names=col_names, comment='@', low_memory=False)
+df = pd.read_csv(Path(__file__).resolve().parents[1] / "KDDTrain+.txt", header=None, names=col_names, comment='@', low_memory=False)
 print(f"Dataset caricato. Numero di righe: {len(df)}")
 
 # Rimuoviamo le ultime due colonne ('label' e 'difficulty') che non servono per l'addestramento unsupervised
@@ -44,6 +46,6 @@ model.fit(df)
 print("Addestramento completato.")
 
 # 3. Salvataggio del Modello Addestrato
-model_filename = '../services/inference/isolation_forest_model.joblib'
+model_filename = Path(__file__).resolve().parents[1] / 'services/inference/isolation_forest_model.joblib'
 joblib.dump(model, model_filename)
 print(f"Modello salvato con successo come '{model_filename}'")
